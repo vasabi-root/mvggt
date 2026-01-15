@@ -237,7 +237,7 @@ class LVAM(nn.Module):
         mm = self.project_mm(vis_guided_l)
         return mm
 
-class Pi3(nn.Module):
+class MVGGT(nn.Module):
     def __init__(
             self,
             pos_type='rope100',
@@ -484,12 +484,12 @@ class Pi3(nn.Module):
                     self.controlnet_injectors.append(zero_conv)
 
             if self.use_pretrained_weights:
-                # Load multimodal_decoder weights from pretrained Pi3 model ckpts/Pi3/model.safetensors
-                pi3_weight = load_file('ckpts/Pi3/model.safetensors')
-                pi3_dec_weight = {k.replace('decoder.', ''):v for k,v in pi3_weight.items() if k.startswith('decoder.')}
+                # Load multimodal_decoder weights from pretrained MVGGT model ckpts/MVGGT/model.safetensors
+                mvggt_weight = load_file('ckpts/MVGGT/model.safetensors')
+                mvggt_dec_weight = {k.replace('decoder.', ''):v for k,v in mvggt_weight.items() if k.startswith('decoder.')}
 
                 remapped_weights = {}
-                for k, v in pi3_dec_weight.items():
+                for k, v in mvggt_dec_weight.items():
                     try:
                         global_idx_str, rest_of_key = k.split('.', 1)
                         global_idx = int(global_idx_str)
@@ -501,7 +501,7 @@ class Pi3(nn.Module):
                         pass
 
                 load_result = self.multimodal_decoder.load_state_dict(remapped_weights, strict=False)
-                print(f"Loading pi3 decoder to initialize multimodal_decoder. Result:")
+                print(f"Loading mvggt decoder to initialize multimodal_decoder. Result:")
                 print(f"  Missing keys: {load_result.missing_keys}")
                 print(f"  Unexpected keys: {load_result.unexpected_keys}")
             
@@ -594,15 +594,15 @@ class Pi3(nn.Module):
         self.num_dec_blk_not_to_checkpoint = num_dec_blk_not_to_checkpoint
 
         if pretrained_model_name_or_path is not None:
-            pi3_ckpt = load_file(os.path.join(pretrained_model_name_or_path, 'model.safetensors'))
-            self.load_state_dict(pi3_ckpt, strict=False)
-            print(f'[Pi3] Load pretrained model from {pretrained_model_name_or_path}')
+            mvggt_ckpt = load_file(os.path.join(pretrained_model_name_or_path, 'model.safetensors'))
+            self.load_state_dict(mvggt_ckpt, strict=False)
+            print(f'[MVGGT] Load pretrained model from {pretrained_model_name_or_path}')
 
         if ckpt is not None:
             checkpoint = torch.load(ckpt, weights_only=False, map_location='cpu')
 
             res = self.load_state_dict(checkpoint, strict=False)
-            print(f'[Pi3] Load checkpoints from {ckpt}: {res}')
+            print(f'[MVGGT] Load checkpoints from {ckpt}: {res}')
 
             del checkpoint
             torch.cuda.empty_cache()

@@ -15,9 +15,9 @@ from .dinov2.hub.backbones import dinov2_vitl14, dinov2_vitl14_reg
 from huggingface_hub import PyTorchModelHubMixin
 from transformers import RobertaModel
 
-class Pi3(nn.Module, PyTorchModelHubMixin):
+class MVGGT(nn.Module, PyTorchModelHubMixin):
     """
-    Core implementation of the Pi3 model.
+    Core implementation of the MVGGT model.
 
     This is a Transformer-based multi-view geometry model that can jointly predict
     3D point clouds, camera poses, and confidence for each point from a series of input images (views).
@@ -31,7 +31,7 @@ class Pi3(nn.Module, PyTorchModelHubMixin):
             text_model_name='roberta-base',
         ):
         """
-        Initialize the Pi3 model.
+        Initialize the MVGGT model.
 
         Args:
             pos_type (str): Type of positional encoding to use. 'rope' means Rotary Position Embedding.

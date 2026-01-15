@@ -11,9 +11,9 @@ import gc
 import time
 # import spaces         # only for web demo
 
-from pi3.utils.geometry import se3_inverse, homogenize_points, depth_edge
-from pi3.models.pi3_training import Pi3
-from pi3.utils.basic import load_images_as_tensor
+from mvggt.utils.geometry import se3_inverse, homogenize_points, depth_edge
+from mvggt.models.mvggt_training import MVGGT
+from mvggt.utils.basic import load_images_as_tensor
 
 import trimesh
 import matplotlib
@@ -603,14 +603,15 @@ if __name__ == '__main__':
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    print("Initializing and loading Pi3 model...")
+    print("Initializing and loading MVGGT model...")
     
     ckpt_path = '/data/3D_data/wcl/MVGGT/best_model/pytorch_model.bin'
-    model = Pi3(
+    model = MVGGT(
         use_referring_segmentation=True, 
         load_vggt=False, 
         train_conf=True, 
-        ckpt=ckpt_path 
+        ckpt=ckpt_path,
+        use_pretrained_weights=False
     )
 
     print(f"Loading checkpoint from {ckpt_path}...")
@@ -632,56 +633,130 @@ if __name__ == '__main__':
     with gr.Blocks(
         theme=theme,
         css="""
-        .intro-content { 
-            text-align: center; 
-            margin-bottom: 30px; 
-            padding: 20px;
+        @import url('https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro');
+        
+        body {
+            font-family: 'Noto Sans', sans-serif;
         }
-        .intro-content h1 { 
-            font-size: 2.5em; 
-            margin-bottom: 10px; 
-            font-weight: bold;
-        }
-        .intro-content h2 { 
-            font-size: 1.8em; 
-            margin-bottom: 15px; 
-            font-weight: normal;
-            color: #555;
-        }
-        .intro-content .subtitle { 
-            font-size: 1.1em; 
-            color: #666; 
-            margin-bottom: 20px; 
-        }
-        .intro-content a { 
-            color: #2563eb; 
-            text-decoration: none; 
-            margin: 0 10px;
-        }
-        .intro-content a:hover { 
-            text-decoration: underline; 
-        }
-        .intro-content p {
-            font-size: 1.1em;
-            line-height: 1.6;
-            max-width: 900px;
-            margin: 0 auto 20px auto;
-        }
-        .instructions {
-            text-align: left;
-            max-width: 800px;
+        
+        .container {
+            max-width: 1200px;
             margin: 0 auto;
-            background-color: #f3f4f6;
-            padding: 20px;
-            border-radius: 8px;
+            padding: 0 20px;
         }
-        .instructions h3 {
-            margin-top: 0;
-        }
-        .custom-log {
-            font-weight: bold;
-            color: #4b5563;
+        
+        .publication-header {
             text-align: center;
+            margin-bottom: 30px;
+            padding-top: 20px;
+        }
+        
+        .publication-title {
+            font-family: 'Google Sans', sans-serif;
+            font-size: 2.2rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            line-height: 1.2;
+            color: #363636;
+        }
+        
+        .publication-authors {
+            font-family: 'Google Sans', sans-serif;
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        
+        .author-block {
+            display: inline-block;
+            margin-right: 10px;
+            color: #363636;
+        }
+        
+        .author-block a {
+            color: #2563eb;
+            text-decoration: none;
+        }
+        
+        .affiliations {
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+            color: #4a4a4a;
+        }
+        
+        .publication-links {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .link-block a {
+            display: inline-flex;
+            align-items: center;
+            padding: 8px 18px;
+            background-color: #363636;
+            color: #fff !important;
+            border-radius: 290486px;
+            font-size: 1rem;
+            text-decoration: none;
+            transition: background-color 0.3s ease;
+        }
+        
+        .link-block a:hover {
+            background-color: #4a4a4a;
+        }
+        
+        .link-block .icon {
+            margin-right: 5px;
+        }
+        
+        .teaser-section {
+            margin: 40px auto;
+            text-align: center;
+            max-width: 85%;
+        }
+        
+        .teaser-image {
+            width: 100%;
+            border-radius: 5px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+        }
+        
+        .instructions {
+            margin: 40px auto;
+            max-width: 800px;
+            background-color: #f5f5f5;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: left;
+        }
+        
+        .instructions h3 {
+            font-family: 'Google Sans', sans-serif;
+            font-size: 1.2rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        
+        .instructions ol {
+            padding-left: 20px;
+        }
+        
+        .instructions li {
+            margin-bottom: 8px;
+            font-size: 1rem;
+            color: #4a4a4a;
+        }
+        
+        /* Custom section styling to match */
+        .section-header {
+            font-family: 'Google Sans', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 15px;
+            color: #363636;
+            border-bottom: none;
         }
         """,
     ) as demo:
@@ -692,29 +767,65 @@ if __name__ == '__main__':
 
         gr.HTML(
         """
-        <div class="intro-content">
-            <h1>MVGGT</h1>
-            <h2>Multimodal Visual Geometry Grounded Transformer for Multiview 3D Referring Expression Segmentation</h2>
-            <p class="subtitle">
-                <a href="" target="_blank">GitHub Repository</a> |
-                <a href="#" target="_blank">Project Page</a>
-            </p>
+        <div class="publication-header">
+            <h1 class="publication-title">MVGGT: Multimodal Visual Geometry Grounded Transformer for Multiview 3D Referring Expression Segmentation</h1>
             
-            <p>
-                MVGGT combines 3D reconstruction with referring expression comprehension. 
-                Upload your multi-view images or video, and provide a text description (e.g., "the black chair"). 
-                The model will reconstruct the sparse 3D point cloud and camera poses, and segment and highlight the described object in 3D space.
-            </p>
-            
-            <div class="instructions">
-                <h3>How to Use:</h3>
-                <ol>
-                    <li><strong>Upload Media:</strong> Upload a video or a collection of images.</li>
-                    <li><strong>Text Prompt:</strong> Enter a text description of the object you want to find (e.g. "wooden table").</li>
-                    <li><strong>Reconstruct:</strong> Click "Reconstruct" to run the model.</li>
-                    <li><strong>Interact:</strong> View the 3D result. Toggle "Show Mask" to see the segmentation. Adjust "Confidence Threshold" to filter points.</li>
-                </ol>
+            <div class="publication-authors">
+                <span class="author-block">Changli Wu<sup>1, 2, †</sup>,</span>
+                <span class="author-block">Haodong Wang<sup>1, †</sup>,</span>
+                <span class="author-block">Jiayi Ji<sup>1</sup>,</span>
+                <span class="author-block">Yutian Yao<sup>5</sup>,</span>
+                <br>
+                <span class="author-block">Chunsai Du<sup>4</sup>,</span>
+                <span class="author-block">Jihua Kang<sup>4</sup>,</span>
+                <span class="author-block">Yanwei Fu<sup>3, 2</sup>,</span>
+                <span class="author-block">Liujuan Cao<sup>1, *</sup></span>
             </div>
+            
+            <div class="affiliations">
+                <span class="author-block"><sup>1</sup>Xiamen University,</span>
+                <span class="author-block"><sup>2</sup>Shanghai Innovation Institute,</span>
+                <span class="author-block"><sup>3</sup>Fudan University,</span>
+                <br>
+                <span class="author-block"><sup>4</sup>ByteDance,</span>
+                <span class="author-block"><sup>5</sup>Tianjin University of Science and Technology</span>
+            </div>
+            
+            <div class="affiliations" style="font-size: 0.9em;">
+                <span class="author-block"><sup>†</sup>Equal Contribution,</span>
+                <span class="author-block"><sup>*</sup>Corresponding Author</span>
+            </div>
+            
+            <div class="publication-links">
+                <span class="link-block">
+                    <a href="https://arxiv.org/abs/2601.06874" target="_blank">
+                        <span class="icon" style="color: white;">📄</span>
+                        <span style="color: white;">Paper</span>
+                    </a>
+                </span>
+                <span class="link-block">
+                    <a href="https://github.com/sosppxo/mvggt" target="_blank">
+                        <span class="icon" style="color: white;">💻</span>
+                        <span style="color: white;">Code</span>
+                    </a>
+                </span>
+                <span class="link-block">
+                    <a href="https://mvggt.github.io/" target="_blank">
+                        <span class="icon" style="color: white;">🌐</span>
+                        <span style="color: white;">Project</span>
+                    </a>
+                </span>
+            </div>
+        </div>
+
+        <div class="instructions">
+            <h3>How to Use This Demo</h3>
+            <ol>
+                <li><strong>Upload Media:</strong> Upload a video or a collection of images from multiple viewpoints.</li>
+                <li><strong>Text Prompt:</strong> Enter a text description of the object you want to find (e.g., "the wooden table").</li>
+                <li><strong>Reconstruct:</strong> Click "Reconstruct" to run the model.</li>
+                <li><strong>Interact:</strong> View the 3D result. Toggle "Apply Text Mask" to see the segmentation. Adjust "Confidence Threshold" to filter points.</li>
+            </ol>
         </div>
         """
     )
@@ -722,11 +833,20 @@ if __name__ == '__main__':
         with gr.Row():
             with gr.Column(scale=1):
                 with gr.Group():
-                    gr.Markdown("### 1. Upload Media")
+                    gr.Markdown("## 1. Upload Media")
                     input_video = gr.Video(label="Upload Video", interactive=True)
                     input_images = gr.File(file_count="multiple", label="Or Upload Images", interactive=True)
-                    text_prompt = gr.Textbox(label="Text Prompt", placeholder="e.g. 'the red chair'", interactive=True)
-                    interval = gr.Number(None, label='Frame/Image Interval', info="Sampling interval. Video default: 1 FPS. Image default: 1 (all images).")
+                    text_prompt = gr.Textbox(
+                        label="Text Prompt", 
+                        placeholder="e.g. 'the red chair' or 'a wooden table'", 
+                        interactive=True,
+                        info="Describe the object you want to segment in 3D space."
+                    )
+                    interval = gr.Number(
+                        None, 
+                        label='Frame/Image Interval', 
+                        info="Sampling interval. Video default: 1 FPS. Image default: 1 (all images)."
+                    )
                 
                 image_gallery = gr.Gallery(
                     label="Image Preview",
@@ -738,23 +858,46 @@ if __name__ == '__main__':
                 )
 
             with gr.Column(scale=2):
-                gr.Markdown("### 2. View Reconstruction")
+                gr.Markdown("## 2. View Reconstruction")
                 log_output = gr.Markdown("Please upload media and click Reconstruct.", elem_classes=["custom-log"])
-                reconstruction_output = gr.Model3D(height=480, zoom_speed=0.5, pan_speed=0.5, label="3D Output")
+                reconstruction_output = gr.Model3D(
+                    height=480, 
+                    zoom_speed=0.5, 
+                    pan_speed=0.5, 
+                    label="3D Output",
+                    show_label=True
+                )
                 
                 with gr.Row():
-                    submit_btn = gr.Button("Reconstruct", scale=3, variant="primary")
+                    submit_btn = gr.Button("Reconstruct", scale=3, variant="primary", size="lg")
                     clear_btn = gr.ClearButton(
-                        scale=1
+                        scale=1,
+                        size="lg"
                     )
                 
                 with gr.Group():
-                    gr.Markdown("### 3. Adjust Visualization")
+                    gr.Markdown("## 3. Adjust Visualization")
                     with gr.Row():
-                        conf_thres = gr.Slider(minimum=0, maximum=100, value=20, step=0.1, label="Confidence Threshold (%)")
-                        show_cam = gr.Checkbox(label="Show Cameras", value=True)
-                        apply_mask = gr.Checkbox(label="Apply Text Mask", value=False)
-                    frame_filter = gr.Dropdown(choices=["All"], value="All", label="Show Points from Frame")
+                        conf_thres = gr.Slider(
+                            minimum=0, 
+                            maximum=100, 
+                            value=10, 
+                            step=0.1, 
+                            label="Confidence Threshold (%)",
+                            info="Filter points by confidence score."
+                        )
+                        show_cam = gr.Checkbox(label="Show Cameras", value=True, info="Display camera poses in 3D view")
+                        apply_mask = gr.Checkbox(
+                            label="Apply Text Mask", 
+                            value=False,
+                            info="Highlight segmented object in red"
+                        )
+                    frame_filter = gr.Dropdown(
+                        choices=["All"], 
+                        value="All", 
+                        label="Show Points from Frame",
+                        info="Filter points by source frame"
+                    )
 
         # Set clear button targets
         clear_btn.add([input_video, input_images, reconstruction_output, log_output, target_dir_output, image_gallery, interval, text_prompt, apply_mask])

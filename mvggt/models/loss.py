@@ -46,7 +46,7 @@ class PointLoss(nn.Module):
             self.expected_dist_thresh = expected_dist_thresh
 
     def prepare_segformer(self):
-        from pi3.models.segformer.model import EncoderDecoder
+        from mvggt.models.segformer.model import EncoderDecoder
         self.segformer = EncoderDecoder()
         self.segformer.load_state_dict(torch.load('ckpts/segformer.b0.512x512.ade.160k.pth', map_location=torch.device('cpu'), weights_only=False)['state_dict'])
         self.segformer = self.segformer.cuda()
@@ -615,7 +615,7 @@ class ReferringMaskLoss(nn.Module):
         details['refer_iou_per_view'] = iou_per_view.detach()
         return total_loss, details
 
-class Pi3Loss(nn.Module):
+class MVGGTLoss(nn.Module):
     def __init__(
         self,
         train_conf=False,

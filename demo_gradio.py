@@ -478,7 +478,6 @@ def gradio_demo(
     if not text_prompt or len(text_prompt.strip()) == 0:
         return None, "Text prompt is required. Please enter a text description.", None, None
 
-    start_time = time.time()
     gc.collect()
     torch.cuda.empty_cache()
 
@@ -521,8 +520,6 @@ def gradio_demo(
     gc.collect()
     torch.cuda.empty_cache()
 
-    end_time = time.time()
-    print(f"Total time: {end_time - start_time:.2f} seconds (including IO)")
     log_msg = f"Reconstruction Success ({len(all_files)} frames). Waiting for visualization."
 
     return glbfile, log_msg, gr.Dropdown(choices=frame_filter_choices, value=frame_filter, interactive=True)

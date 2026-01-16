@@ -13,6 +13,7 @@
 [![Paper](https://img.shields.io/badge/Paper-Arxiv-b31b1b.svg)](https://arxiv.org/abs/2601.06874)
 [![Project Page](https://img.shields.io/badge/Project-Website-blue.svg)](https://sosppxo.github.io/mvggt.github.io/)
 [![Demo](https://img.shields.io/badge/Demo-HuggingFace-orange.svg)](https://huggingface.co/spaces/sosppxo/mvggt)
+[![Weights](https://img.shields.io/badge/Weights-HuggingFace-yellow.svg)](https://huggingface.co/sosppxo/mvggt)
 
 </div>
 
@@ -51,6 +52,63 @@ We propose the **Multimodal Visual Geometry Grounded Transformer (MVGGT)**, an e
 *Figure 2: Architecture of MVGGT. It features a Frozen Reconstruction Branch (top) and a Trainable Multimodal Branch (bottom).*
 
 > **Note:** For interactive 3D visualizations and video comparisons with other methods, please visit our [**Project Page**](https://sosppxo.github.io/mvggt.github.io/).
+
+## 🚀 Demo Deployment
+
+Follow these steps to deploy the interactive demo locally:
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/sosppxo/mvggt.git
+cd mvggt
+```
+
+### 2. Create conda environment
+
+Create and activate a new conda environment:
+
+```bash
+conda create -n mvggt python=3.12
+conda activate mvggt
+```
+
+### 3. Install dependencies
+
+Install the required packages for the demo:
+
+```bash
+pip install -r requirements_demo.txt
+```
+
+### 4. Download model weights and tokenizer
+
+1. **Download pre-trained model weights**: Download from [Hugging Face](https://huggingface.co/sosppxo/mvggt) and update the `ckpt_path` in `demo_gradio.py` (line 608) to point to your checkpoint file.
+
+2. **Download RoBERTa tokenizer**: The demo requires RoBERTa tokenizer. Download it using:
+
+```bash
+mkdir -p ckpts
+python -c "from transformers import RobertaTokenizer; RobertaTokenizer.from_pretrained('roberta-base').save_pretrained('./ckpts/roberta-base')"
+```
+
+Or manually download from Hugging Face and place it in `./ckpts/roberta-base/`.
+
+### 5. Launch the demo
+
+Run the Gradio demo:
+
+```bash
+python demo_gradio.py
+```
+
+The demo will be available at `http://localhost:7860` (or the URL shown in the terminal). You can use the `share=True` option to create a public link.
+
+### Usage
+
+1. Upload multiple images or a video containing multi-view scenes
+2. Enter a referring expression describing the target object
+3. The model will generate 3D segmentation results that can be downloaded as GLB files
 
 ## 📝 Citation
 

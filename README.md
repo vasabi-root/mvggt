@@ -25,7 +25,7 @@ This repository is the official implementation of **MVGGT**. We are currently pr
 
 - [ ] **Release the MVRefer Benchmark** (Dataset & Evaluation scripts).
 - [ ] **Release Training & Inference Code**.
-- [ ] **Release Pre-trained Models**.
+- [x] **Release Pre-trained Models**.
 - [x] **Release Interactive Demo Code** (Local version).
 
 ---

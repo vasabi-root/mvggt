@@ -1,0 +1,3 @@
+[submodule "scanrefer"]
+	path = scanrefer
+	url = git@github.com:vasabi-root/ScanRefer.git

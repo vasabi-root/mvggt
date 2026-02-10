@@ -535,21 +535,7 @@ class MVGGT(nn.Module):
             print("Loading vggt encoder", self.encoder.load_state_dict(vggt_enc_weight, strict=False))
 
             # 2. Load decoder weights
-            # Decoder weights are interleaved from 'global_blocks' and 'frame_blocks' in VGGT model
-
-            vggt_dec_weight = {k.replace('aggregator.global_blocks.', ''):vggt_weight[k] for k in list(vggt_weight.keys()) if k.startswith('aggregator.global_blocks.')}
-            vggt_dec_weight1 = {}
-            for k in list(vggt_dec_weight.keys()):
-                idx = k.split('.')[0]
-                other = k[len(idx):]
-                vggt_dec_weight1[f'{int(idx)*2 + 1}{other}'] = vggt_dec_weight[k]
-            vggt_dec_weight = vggt_dec_weight1 
-
-            vggt_dec_weight_frame = {k.replace('aggregator.frame_blocks.', ''):vggt_weight[k] for k in list(vggt_weight.keys()) if k.startswith('aggregator.frame_blocks.')}
-            for k in list(vggt_dec_weight_frame.keys()):
-                idx = k.split('.')[0]
-                other = k[len(idx):]
-                vggt_dec_weight[f'{int(idx)*2}{other}'] = vggt_dec_weight_frame[k]
+            vggt_dec_weight = {k.replace('decoder.', ''):vggt_weight[k] for k in list(vggt_weight.keys()) if k.startswith('decoder.')}
 
             print("Loading vggt decoder", self.decoder.load_state_dict(vggt_dec_weight, strict=False))
 

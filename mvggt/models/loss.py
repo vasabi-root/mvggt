@@ -7,8 +7,6 @@ import math
 from ..utils.geometry import homogenize_points, se3_inverse, depth_edge
 from ..utils.alignment import align_points_scale
 
-from datasets import __HIGH_QUALITY_DATASETS__, __MIDDLE_QUALITY_DATASETS__
-
 # ---------------------------------------------------------------------------
 # Some functions from MoGe
 # ---------------------------------------------------------------------------
@@ -34,10 +32,11 @@ def angle_diff_vec3(v1: torch.Tensor, v2: torch.Tensor, eps: float = 1e-12):
 # ---------------------------------------------------------------------------
 
 class PointLoss(nn.Module):
-    def __init__(self, local_align_res=4096, train_conf=False, expected_dist_thresh=0.02):
+    def __init__(self, local_align_res=4096, train_conf=False, expected_dist_thresh=0.02, compute_normal_loss=True):
         super().__init__()
         self.local_align_res = local_align_res
         self.criteria_local = nn.L1Loss(reduction='none')
+        self.compute_normal_loss = compute_normal_loss
 
         self.train_conf = train_conf
         if self.train_conf:
@@ -158,13 +157,13 @@ class PointLoss(nn.Module):
         details['local_pts_loss'] = local_pts_loss.mean()
 
         # normal loss
-        normal_batch_id = [i for i in range(len(gt['dataset_names'])) if gt['dataset_names'][i] in __HIGH_QUALITY_DATASETS__ + __MIDDLE_QUALITY_DATASETS__]
-        if len(normal_batch_id) == 0:
-            normal_loss =  0.0 * aligned_local_pts.mean()
-        else:
-            normal_loss = self.noraml_loss(aligned_local_pts[normal_batch_id], gt_local_pts[normal_batch_id], valid_masks[normal_batch_id])
+        if self.compute_normal_loss:
+            normal_loss = self.noraml_loss(aligned_local_pts, gt_local_pts, valid_masks)
             final_loss += normal_loss.mean()
-        details['normal_loss'] = normal_loss.mean()
+            details['normal_loss'] = normal_loss.mean()
+        else:
+            normal_loss = torch.tensor(0.0, device=aligned_local_pts.device)
+            details['normal_loss'] = normal_loss
 
         # [Optional] Global Point Loss
         if 'global_points' in pred and pred['global_points'] is not None:
@@ -673,7 +672,7 @@ class MVGGTLoss(nn.Module):
         extrinsics = se3_inverse(poses)
         gt_local_pts = torch.einsum('bnij, bnhwj -> bnhwi', extrinsics, homogenize_points(gt_pts))[..., :3]
         
-        dataset_names = gt[0]['dataset']
+        # dataset_names = gt[0]['dataset']
 
         return dict(
             imgs = torch.stack([view['img'] for view in gt], dim=1),
@@ -682,7 +681,7 @@ class MVGGTLoss(nn.Module):
             valid_masks=masks,
             camera_poses=poses,
             referring_masks=referring_masks if self.use_referring_segmentation else None,
-            dataset_names=dataset_names
+            # dataset_names=dataset_names
         )
     
     def normalize_pred(self, pred, gt):

@@ -531,7 +531,7 @@ class MVGGT(nn.Module):
             vggt_weight = load_file('ckpts/VGGT-1B/model.safetensors')
 
             # 1. Load encoder weights
-            vggt_enc_weight = {k.replace('aggregator.patch_embed.', ''):vggt_weight[k] for k in list(vggt_weight.keys()) if k.startswith('aggregator.patch_embed.')}
+            vggt_enc_weight = {k.replace('encoder.', ''):vggt_weight[k] for k in list(vggt_weight.keys()) if k.startswith('encoder.')}
             print("Loading vggt encoder", self.encoder.load_state_dict(vggt_enc_weight, strict=False))
 
             # 2. Load decoder weights

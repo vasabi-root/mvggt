@@ -267,9 +267,15 @@ class ScanReferMvggtDataset(Dataset):
         # Chooses `self.num_views` frames from the scene with id `scene_id`
         frame_idxs = [int(name[:-4]) for name in os.listdir(f"{self.scannet_root}/images/{scene_id}/color") if name[-4:] == ".jpg"]
         frame_idxs.sort()
-        if len(frame_idxs) <= self.num_views:
+            
+        while len(frame_idxs) < self.num_views:
+            frame_idxs.append(frame_idxs[0])
+        if len(frame_idxs) == self.num_views:
             return frame_idxs
-        return frame_idxs[::len(frame_idxs)//self.num_views][:-1]
+        
+        step = len(frame_idxs)//self.num_views
+        halt = step * self.num_views
+        return frame_idxs[:halt:step]
         
 if __name__ == '__main__':
     from scanrefer.lib.config import CONF

@@ -186,6 +186,7 @@ class ScanReferMvggtDataset(Dataset):
         return {
             'imgs': torch.stack([v['img'] for v in view_list]),           # (N 3 H W)
             'input_ids': tokens.input_ids[0],
+            'attention_mask': tokens.attention_mask[0],
             'view_list': view_list
         }
 
@@ -195,8 +196,9 @@ class ScanReferMvggtDataset(Dataset):
         # batch = list of dicts
         imgs = torch.stack([b['imgs'] for b in batch])                    # (B N 3 H W)
         input_ids = torch.stack([b['input_ids'] for b in batch])
+        attention_masks = torch.stack([b['attention_mask'] for b in batch])
         view_lists = [b['view_list'] for b in batch]                      # list[B] of list[N]
-        return {'imgs': imgs, 'input_ids': input_ids, 'gt_raw': view_lists}
+        return {'imgs': imgs, 'input_ids': input_ids, 'attention_masks': attention_masks, 'gt_raw': view_lists,}
     
     def _load_rgb(self, scene_id, frame_idx):
         path = f"{self.scannet_root}/images/{scene_id}/color/{frame_idx}.jpg"      # :06d may be for new scannet

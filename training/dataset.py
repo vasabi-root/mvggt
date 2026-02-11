@@ -188,6 +188,7 @@ class ScanReferMvggtDataset(Dataset):
         }
 
     # collate_fn for batch > 1
+    @staticmethod
     def collate_fn(batch):
         # batch = list of dicts
         imgs = torch.stack([b['imgs'] for b in batch])                    # (B N 3 H W)

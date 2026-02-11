@@ -75,8 +75,15 @@ def project_points_to_mask(obj_points, pose_cam2world, K, H, W, fill_gaps=False)
     
     # fill gaps with convex hull
     if fill_gaps and valid.sum() >= 3:
-        # TODO: implement
-        pass
+        pts2d = torch.stack([u[valid], v[valid]], dim=1).cpu().numpy()   # (N, 2)
+
+        hull = cv2.convexHull(pts2d)                                     # convex hull vertices
+
+        mask_np = np.zeros((H, W), dtype=np.uint8)
+        cv2.fillPoly(mask_np, [hull], 1)                                 # fill the polygon
+
+        mask = torch.from_numpy(mask_np)
+
     return mask.float()
 
 def backproject(depth: torch.Tensor, K: torch.Tensor) -> torch.Tensor:
@@ -156,7 +163,7 @@ class ScanReferMvggtDataset(Dataset):
 
             # object 3D points -> 2D mask
             obj_pts = self._load_object_points(scene_id, obj_id)
-            mask = project_points_to_mask(obj_pts, pose_cam2world, K_color, H, W)
+            mask = project_points_to_mask(obj_pts, pose_cam2world, K_color, H, W, True)
             
             mask = F.resize(mask.unsqueeze(0), size=self.small_side_img, antialias=True)
             depth = F.resize(depth.unsqueeze(0), size=self.small_side_img, antialias=True)

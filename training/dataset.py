@@ -113,7 +113,7 @@ def backproject(depth: torch.Tensor, K: torch.Tensor) -> torch.Tensor:
     return torch.stack([x, y, z], dim=-1)  # (H, W, 3)
 
 class ScanReferMvggtDataset(Dataset):
-    def __init__(self, scanrefer_path, scannet_root, tokenizer, num_views=8, img_size=224):
+    def __init__(self, scanrefer_path, scannet_root, tokenizer, num_views=8, img_size=(322, 238)): # TODO: add patch_size and fit img_size with patch_size
         '''
         ScanRefer_filtered_train.json not above 0706
         ScanRefer_filtered_val.json not above 0706
@@ -123,9 +123,11 @@ class ScanReferMvggtDataset(Dataset):
         self.scannet_root = scannet_root
         self.tokenizer = tokenizer
         self.num_views = num_views
-        self.small_side_img=img_size
+        
+        self.img_size = img_size
+        
         self.transform = transforms.Compose([
-            transforms.Resize(self.small_side_img),
+            transforms.Resize(self.img_size),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
@@ -165,8 +167,8 @@ class ScanReferMvggtDataset(Dataset):
             obj_pts = self._load_object_points(scene_id, obj_id)
             mask = project_points_to_mask(obj_pts, pose_cam2world, K_color, H, W, True)
             
-            mask = F.resize(mask.unsqueeze(0), size=self.small_side_img, antialias=True)
-            depth = F.resize(depth.unsqueeze(0), size=self.small_side_img, antialias=True)
+            mask = F.resize(mask.unsqueeze(0), size=self.img_size, antialias=True)
+            depth = F.resize(depth.unsqueeze(0), size=self.img_size, antialias=True)
 
             # transform RGB. PIL -> Tensor
             rgb = self.transform(rgb)

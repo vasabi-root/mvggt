@@ -9,6 +9,8 @@ import torchvision.transforms.functional as F
 import torch
 from mvggt.utils.geometry import homogenize_points
 
+import pandas as pd
+
 import cv2
 import numpy as np
 from PIL import Image
@@ -16,6 +18,28 @@ import torch
 import open3d as o3d
 import os
 
+def save_tensor_img(batch: torch.Tensor, path: Path):
+    assert len(batch) != 3
+    
+    path = Path(path)
+    
+    for i, tensor in enumerate(batch):
+        # if len(tensor.shape) == 2:
+        #     img = tensor.cpu().detach().numpy()
+        # if len(tensor.shape) == 3:
+        #     img = tensor.permute(1, 2, 0).cpu().detach().numpy()
+        
+        img = F.to_pil_image(tensor)
+        img.save(path.parent / f"{path.stem}_{i}{path.suffix}")
+         
+def draw_mask(img_tensor: torch.Tensor, mask_tensor: torch.Tensor, path: Path) -> None:
+    mask = mask_tensor.cpu().detach().numpy().astype(np.uint8)
+    img = img_tensor.cpu().detach().numpy()
+    img = (np.stack(img[::-1], -1)*255).astype(np.uint8)
+    contour = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)[0]
+    cv2.drawContours(img, contour, -1, (0, 0, 255), 2)
+    cv2.imwrite(path, img)
+    
 def visualize_object(scannet_root: str, scene_id: str, object_id: int):
     scene_path = f"{scannet_root}/scans/{scene_id}"
 
@@ -53,7 +77,25 @@ def visualize_object(scannet_root: str, scene_id: str, object_id: int):
         height=720,
         mesh_show_back_face=True
     )
+    
+def convex_hull(u, v, H, W):
+    pts2d = torch.stack([u, v], dim=1).cpu().numpy()   # (N, 2)
 
+    hull = cv2.convexHull(pts2d)                                     # convex hull vertices
+
+    mask_np = np.zeros((H, W), dtype=np.uint8)
+    cv2.fillPoly(mask_np, [hull], 1)                                 # fill the polygon
+
+    mask = torch.from_numpy(mask_np)
+    return mask
+
+def dilate_erode(mask, H, W, k=0.1):
+    kernel_sz = int(min(H,W) * k)
+    kernel = np.ones((kernel_sz, kernel_sz), np.uint8)
+    dilated = cv2.dilate(mask.cpu().detach().numpy(), kernel)
+    eroded = cv2.erode(dilated, kernel)
+    return torch.from_numpy(eroded)
+    
 
 def project_points_to_mask(obj_points, pose_cam2world, K, H, W, fill_gaps=False):
     # world 3D -> camera 2D
@@ -75,14 +117,8 @@ def project_points_to_mask(obj_points, pose_cam2world, K, H, W, fill_gaps=False)
     
     # fill gaps with convex hull
     if fill_gaps and valid.sum() >= 3:
-        pts2d = torch.stack([u[valid], v[valid]], dim=1).cpu().numpy()   # (N, 2)
-
-        hull = cv2.convexHull(pts2d)                                     # convex hull vertices
-
-        mask_np = np.zeros((H, W), dtype=np.uint8)
-        cv2.fillPoly(mask_np, [hull], 1)                                 # fill the polygon
-
-        mask = torch.from_numpy(mask_np)
+        mask = convex_hull(u[valid], v[valid], H, W)
+        # mask = dilate_erode(mask, H, W)
 
     return mask.float()
 
@@ -121,6 +157,9 @@ class ScanReferMvggtDataset(Dataset):
         with open(scanrefer_path) as f:
             self.data = [ann for ann in json.load(f)]
         self.scannet_root = scannet_root
+        self.label_mapper = pd.read_csv(f"{self.scannet_root}/scannetv2-labels.combined.tsv", sep='\t')
+        self.draw_masks = False # for debugging
+        
         self.tokenizer = tokenizer
         self.num_views = num_views
         
@@ -129,7 +168,6 @@ class ScanReferMvggtDataset(Dataset):
         self.transform = transforms.Compose([
             transforms.Resize(self.img_size),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
 
     def __len__(self):
@@ -139,13 +177,14 @@ class ScanReferMvggtDataset(Dataset):
         ann = self.data[idx]
         scene_id = ann['scene_id']
         obj_id = ann['object_id']
+        obj_name = ann['object_name']
         text = ann['description']
 
         frame_ids = self._sample_frames(scene_id)
 
         view_list = []
         for fid in frame_ids:
-            rgb = self._load_rgb(scene_id, fid)                  # PIL
+            rgb = self._load_rgb(scene_id, fid)                  # (3 H W)
             H, W = rgb.shape[-2:]
             
             depth = self._load_depth(scene_id, fid)              # (H W)
@@ -159,16 +198,25 @@ class ScanReferMvggtDataset(Dataset):
             # to world
             pts_world = (pose_cam2world @ homogenize_points(pts_local.view(-1, 3)).T)[:-1].T.view(H, W, 3) # [:-1] stands for dehomogenization
 
-            # object 3D points -> 2D mask
-            obj_pts = self._load_object_points(scene_id, obj_id)
-            mask = project_points_to_mask(obj_pts, pose_cam2world, K_color, H, W, True)
+            # TODO: enhance efficiency of calculation. Do not load 3d masks. Try to load only 2d instance masks, instead of semantic ones
+            mask_from_3d = self._load_mask_from_3d_label(scene_id, obj_id, pose_cam2world, K_color, H, W)
+            mask_from_2d = torch.zeros_like(mask_from_3d)
+            if mask_from_3d.sum() > 0:
+                mask_from_2d = self._load_mask_from_2d_label(scene_id, fid, obj_name)
+            
+            # visualize_object(self.scannet_root, scene_id, obj_id)
+            
+            if self.draw_masks:
+                masked_dir = Path('masked')/f'{scene_id}/{obj_name}'
+                os.makedirs(masked_dir, exist_ok=True)
+                draw_mask(rgb, mask_from_2d, masked_dir / f'{fid}.png')
 
             view_list.append({
                 'img': rgb,
                 'pts3d': pts_world,
                 'valid_mask': depth > 0,
                 'camera_pose': pose_cam2world,
-                'referring_mask': mask.bool()
+                'referring_mask': mask_from_2d.bool()
             })
 
         # text
@@ -207,6 +255,10 @@ class ScanReferMvggtDataset(Dataset):
             
         return {'imgs': imgs, 'input_ids': input_ids, 'attention_masks': attention_masks, 'gt_raw': view_lists}
     
+    def _map_obj_name_to_nyu40id(self, obj_name):
+        row = self.label_mapper[self.label_mapper['raw_category'].str.lower() == obj_name.replace('_', ' ').lower()]
+        return row['nyu40id'].values[0]
+    
     def _load_rgb(self, scene_id, frame_idx):
         path = f"{self.scannet_root}/images/{scene_id}/color/{frame_idx}.jpg"      # :06d may be for new scannet
         img = Image.open(path).convert('RGB')
@@ -214,10 +266,29 @@ class ScanReferMvggtDataset(Dataset):
         return img
 
     def _load_depth(self, scene_id, frame_idx):
-        path = f"{self.scannet_root}/images/{scene_id}/depth/{frame_idx}.png"      # :06d may be for new scannet
+        path = f"{self.scannet_root}/images/{scene_id}/depth-erode/{frame_idx}.png"      # :06d may be for new scannet
         depth = cv2.imread(path, cv2.IMREAD_UNCHANGED).astype(np.float32) / 1000.0
         depth = torch.from_numpy(depth).float().unsqueeze(0)
         return F.resize(depth, size=self.img_size, antialias=True).squeeze(0) # (H W)
+    
+    def _load_mask_from_2d_label(self, scene_id, frame_idx, obj_name):
+        path = f"{self.scannet_root}/images/{scene_id}/labelv2-eroded/{frame_idx}.png"
+        labels = cv2.imread(path, cv2.IMREAD_UNCHANGED).astype(np.uint16)
+        labels = torch.from_numpy(labels).to(torch.int).unsqueeze(0)
+        obj_id = self._map_obj_name_to_nyu40id(obj_name) # TODO: map obj_id instead of obj_name
+        mask = labels == obj_id
+        return F.resize(mask, size=self.img_size, antialias=True).squeeze(0) # (H W)
+    
+    def _load_mask_from_3d_label(self, scene_id, obj_id, pose_cam2world, K, H, W):
+        '''
+        Maps object 3D points -> 2D mask
+        - `obj_id`: object id from aggregation.json
+        - `pose_cam2world`: camera pose
+        - `K`: camera intrinsics
+        '''
+        obj_pts = self._load_object_points(scene_id, obj_id)
+        mask = project_points_to_mask(obj_pts, pose_cam2world, K, H, W, False)
+        return mask
 
     def _load_pose(self, scene_id, frame_idx):
         path = f"{self.scannet_root}/images/{scene_id}/pose/{frame_idx}.txt"       # :06d may be for new scannet

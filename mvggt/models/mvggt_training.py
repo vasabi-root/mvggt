@@ -528,7 +528,7 @@ class MVGGT(nn.Module):
 
         if load_vggt:
             # Load VGGT-1B model weights file
-            vggt_weight = load_file('ckpts/VGGT-1B/model.safetensors')
+            vggt_weight = load_file('ckpts/VGGT-1B/pi3.safetensors')
 
             # 1. Load encoder weights
             vggt_enc_weight = {k.replace('encoder.', ''):vggt_weight[k] for k in list(vggt_weight.keys()) if k.startswith('encoder.')}
@@ -632,6 +632,7 @@ class MVGGT(nn.Module):
             # do not use position embedding for special tokens (camera and register tokens)
             # so set pos to 0 for the special tokens
             pos = pos + 1
+            pos = pos.to(hidden.device)
             pos_special = torch.zeros(B * N, self.patch_start_idx, 2).to(hidden.device).to(pos.dtype)
             pos = torch.cat([pos_special, pos], dim=1)
        

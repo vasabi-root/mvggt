@@ -168,6 +168,7 @@ class ScanReferMvggtDataset(Dataset):
         self.transform = transforms.Compose([
             transforms.Resize(self.img_size),
             transforms.ToTensor(),
+            # transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
 
     def __len__(self):
@@ -198,11 +199,7 @@ class ScanReferMvggtDataset(Dataset):
             # to world
             pts_world = (pose_cam2world @ homogenize_points(pts_local.view(-1, 3)).T)[:-1].T.view(H, W, 3) # [:-1] stands for dehomogenization
 
-            # TODO: enhance efficiency of calculation. Do not load 3d masks. Try to load only 2d instance masks, instead of semantic ones
-            mask_from_3d = self._load_mask_from_3d_label(scene_id, obj_id, pose_cam2world, K_color, H, W)
-            mask_from_2d = torch.zeros_like(mask_from_3d)
-            if mask_from_3d.sum() > 0:
-                mask_from_2d = self._load_mask_from_2d_label(scene_id, fid, obj_name)
+            mask_from_2d = self._load_mask_from_2d_label(scene_id, fid, obj_id)
             
             # visualize_object(self.scannet_root, scene_id, obj_id)
             
@@ -271,12 +268,12 @@ class ScanReferMvggtDataset(Dataset):
         depth = torch.from_numpy(depth).float().unsqueeze(0)
         return F.resize(depth, size=self.img_size, antialias=True).squeeze(0) # (H W)
     
-    def _load_mask_from_2d_label(self, scene_id, frame_idx, obj_name):
-        path = f"{self.scannet_root}/images/{scene_id}/labelv2-eroded/{frame_idx}.png"
+    def _load_mask_from_2d_label(self, scene_id, frame_idx, obj_id):
+        path = f"{self.scannet_root}/images/{scene_id}/instance-filt/{frame_idx}.png"
         labels = cv2.imread(path, cv2.IMREAD_UNCHANGED).astype(np.uint16)
         labels = torch.from_numpy(labels).to(torch.int).unsqueeze(0)
-        obj_id = self._map_obj_name_to_nyu40id(obj_name) # TODO: map obj_id instead of obj_name
-        mask = labels == obj_id
+        label = int(obj_id) + 1
+        mask = labels == label
         return F.resize(mask, size=self.img_size, antialias=True).squeeze(0) # (H W)
     
     def _load_mask_from_3d_label(self, scene_id, obj_id, pose_cam2world, K, H, W):
@@ -372,6 +369,6 @@ if __name__ == '__main__':
         tokenizer=tokenizer,
         num_views=8
     )
-    dataset[0]
+    dataset[520]
     # dataloader = DataLoader(dataset, batch_size=16, shuffle=True, collate_fn=ScanReferDataset.collate_fn)
     pass

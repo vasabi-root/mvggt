@@ -10,6 +10,8 @@ train:
   resolution: 
     - [224, 224]
 
+  batch_size: 16 # ignored. Dynamic batch_size calculation based on `max_img_per_gpu`
+
   num_epoch: 30
   iters_per_epoch: 1000
   print_freq: 10
@@ -17,6 +19,7 @@ train:
   optimizer:
     lr: 1e-4
   eval_only: false
+  find_unused_parameters: true
   # resume: ckpts/best_model
 test:
     num_workers: 8
@@ -24,6 +27,7 @@ test:
     print_freq: 10
     iters_per_test: -1
     image_num_range: [8, 8]
+    find_unused_parameters: true
     # low resolution
     resolution: 
     - [518, 336]

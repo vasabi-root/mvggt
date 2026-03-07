@@ -47,7 +47,7 @@ class ScannetDataset(BaseDataset):
 
         self.val_scene_pixels = None
         if self.mode != 'train':
-            val_pixels_path = 'data/mvrefer_val.json'
+            val_pixels_path = 'data/mvrefer_val_sparse.json'
             if os.path.exists(val_pixels_path):
                 with open(val_pixels_path, 'r') as f:
                     self.val_scene_pixels = json.load(f)
@@ -188,6 +188,7 @@ class ScannetDataset(BaseDataset):
         if scene in self._missing_scene_frame_indices:
             return None
 
+        valid_frame_idxs = [int(name[:-4]) for name in os.listdir(self.data_root / str(scene) / 'color')]
         json_path = os.path.join(self.scene_frame_indices_dir, f'{scene}.json')
 
         if not os.path.exists(json_path):
@@ -210,7 +211,8 @@ class ScannetDataset(BaseDataset):
         for frame_key, instance_ids in raw_data.items():
             try:
                 frame_idx = int(frame_key)
-                frame_indices[frame_idx] = set(int(i) for i in instance_ids)
+                if frame_idx in valid_frame_idxs:
+                    frame_indices[frame_idx] = set(int(i) for i in instance_ids)
             except ValueError:
                 continue
 
@@ -309,6 +311,7 @@ class ScannetDataset(BaseDataset):
         scene = self.sequences[index]
         num_imgs = self.num_imgs[scene]
         # Exclude invalid frames from the 0..num_imgs-1 range based on invalid_list
+        valid_frame_names = [int(name[:-4]) for name in os.listdir(self.data_root / str(scene) / 'color')]
         valid_idxs = [i for i in range(num_imgs) if i not in self.invalid_list.get(scene, [])]
         num_imgs = len(valid_idxs)
         if num_imgs == 0:
@@ -323,7 +326,7 @@ class ScannetDataset(BaseDataset):
                 if scene in self.val_scene_pixels and object_id in self.val_scene_pixels[scene]:
                     frame_data = self.val_scene_pixels[scene][object_id]
                     if isinstance(frame_data, dict) and len(frame_data) > 0:
-                        idxs = sorted(int(k) for k in frame_data.keys())[:self.frame_num]
+                        idxs = sorted(int(k) for k in frame_data.keys())[:self.frame_num if len(frame_data) >= self.frame_num else len(frame_data)]
 
         # For training, we want to focus on frames that contain the target object.
         if self.mode == 'train':
@@ -350,7 +353,7 @@ class ScannetDataset(BaseDataset):
             sampled_relative_indices = np.linspace(
                 0, num_imgs - 1, self.frame_num
             ).round().astype(int)
-            idxs = [valid_idxs[i] for i in sampled_relative_indices]
+            idxs = [valid_frame_names[valid_idxs[i]] for i in sampled_relative_indices]
         
         self.this_views_info = dict(
             scene=scene,
@@ -390,9 +393,11 @@ class ScannetDataset(BaseDataset):
                 print(f"NaN in camera pose for view: {posepath}")
             assert ~np.isnan(camera_pose).any(), 'NaN in camera pose for view'
 
-            rgb_image = np.array(Image.open(impath).resize((640, 480), resample=Image.LANCZOS))
-            instance2d = np.array(instance2d.resize((640, 480), resample=Image.NEAREST))
-            depthmap = np.array(Image.open(disppath).resize((640, 480), resample=Image.LANCZOS)).astype(np.float32) / 1000.
+            origin_size = (640, 480)
+
+            rgb_image = np.array(Image.open(impath).resize(origin_size, resample=Image.LANCZOS))
+            instance2d = np.array(instance2d.resize(origin_size, resample=Image.NEAREST))
+            depthmap = np.array(Image.open(disppath).resize(origin_size, resample=Image.LANCZOS)).astype(np.float32) / 1000.
 
             rgb_image, depthmap, intrinsic_, instance2d, *_ = self._crop_resize_if_necessary(
                 rgb_image, depthmap, intrinsic.copy(), resolution, rng=rng, info=impath, instance_map=instance2d)

@@ -9,6 +9,8 @@ train_dataset:
         dataset_source: 'scanrefer'
         z_far: 80
         frame_num: 8
+        resolution:
+            - [322, 238]
         aug_crop: 16
         transform:
             _partial_: true
@@ -29,7 +31,7 @@ test_dataset:
         z_far: 80
         frame_num: 8
         resolution:
-            - [518, 336]
+            - [322, 238]
         transform:
             _partial_: true
             _target_: datasets.base.transforms.ImgToTensor

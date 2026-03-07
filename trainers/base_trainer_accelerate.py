@@ -74,7 +74,7 @@ class BaseTrainer:
             elif dataset_source == 'nr3d':
                 pixel_data_path = 'data/nr3d_val_scene_pixels.json'
             else:
-                pixel_data_path = 'data/mvrefer_val.json'
+                pixel_data_path = 'data/mvrefer_val_sparse.json'
             
             if is_logging_process():
                 print(f"Loading pixel data from: {pixel_data_path}")

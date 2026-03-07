@@ -7,10 +7,14 @@ train:
   max_img_per_gpu: 64             # hres
   # image_num_range: [50, 100]     # hres
   # max_img_per_gpu: 512             # hres
+  find_unused_parameters: true
 
   # low resolution
   resolution: 
     - [224, 224]
+
+test:
+  find_unused_parameters: true
 
 model:
   ckpt: null # <path-to-your-pretrain-checkpoint>

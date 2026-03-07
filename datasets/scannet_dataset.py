@@ -36,7 +36,7 @@ class ScannetDataset(BaseDataset):
         self.verbose = verbose
         self.dataset_label = 'ScanNet'
         mode = self.mode
-        self.data_root = data_root
+        self.data_root = Path(data_root)
         self.dataset_source = dataset_source
         self.max_distance = max_distance
         self.neg_frame_ratio = 0.5
@@ -159,10 +159,11 @@ class ScannetDataset(BaseDataset):
         
         # Cache 2D instance annotation paths similarly to num_imgs
         instance_cache_path = f'data/dataset_cache/scannetmv_{self.dataset_source}_{self.mode}_instance_path_cache.npy'
+        print(self.data_root)
         if not os.path.exists(instance_cache_path):
             self.instance_2d_paths = {}
             # Infer the 'scans' path from the data_root
-            scans_path = os.path.join(os.path.dirname(self.data_root), 'scans')
+            scans_path = os.path.join(self.data_root, 'scans')
             for seq in tqdm(self.sequences, desc="Generating instance path cache"):
                 # Build the 2D instance-filt folder path for each scene
                 instance_folder_path = os.path.join(scans_path, seq, f'{seq}_2d-instance-filt', 'instance-filt')
@@ -358,7 +359,7 @@ class ScannetDataset(BaseDataset):
 
         base_path = os.path.join(self.data_root, scene)
         # Load camera intrinsics
-        intrinsic_path = osp.join(base_path, 'intrinsic/intrinsic_depth.txt')
+        intrinsic_path = osp.join(base_path, 'intrinsic_depth.txt')
         with open(intrinsic_path, 'r') as f:
             intrinsic_text = f.read()
         intrinsic = np.array([float(x) for x in intrinsic_text.split()]).astype(np.float32).reshape(4, 4)[:3, :3]
@@ -391,7 +392,7 @@ class ScannetDataset(BaseDataset):
 
             rgb_image = np.array(Image.open(impath).resize((640, 480), resample=Image.LANCZOS))
             instance2d = np.array(instance2d.resize((640, 480), resample=Image.NEAREST))
-            depthmap = np.array(Image.open(disppath)).astype(np.float32) / 1000.
+            depthmap = np.array(Image.open(disppath).resize((640, 480), resample=Image.LANCZOS)).astype(np.float32) / 1000.
 
             rgb_image, depthmap, intrinsic_, instance2d, *_ = self._crop_resize_if_necessary(
                 rgb_image, depthmap, intrinsic.copy(), resolution, rng=rng, info=impath, instance_map=instance2d)

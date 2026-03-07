@@ -139,7 +139,7 @@ class OneCycleLR(lr_scheduler.OneCycleLR):
             final_div_factor=final_div_factor,
             three_phase=three_phase,
             last_epoch=last_epoch,
-            verbose=verbose,
+            # verbose=verbose,
         )
 
 

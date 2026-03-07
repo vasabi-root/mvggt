@@ -1,0 +1,7 @@
+.vscode
+__pycache__
+data/scannet_data/
+data/ScanRefer/
+data/dataset_cache/
+outputs
+input_images_*

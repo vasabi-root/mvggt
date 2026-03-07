@@ -44,7 +44,7 @@ train:
     auto_resume: true
     start_epoch: 0
     global_step: 0
-    world_size: 1
+    world_size: 2
     rank: -1
     gpu: -1
     dist_on_itp: false

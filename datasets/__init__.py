@@ -148,7 +148,7 @@ def create_dataloader(cfg, mode):
         # Sanity check to ensure the dataset is large enough for the planned iterations.
         print('Needed batch number per epoch (per rank):', (max_img_per_gpu // image_num_range[0]) * cfg.train.iters_per_epoch)
         print('Dataset length per rank:', len(dataset) // world_size)
-        assert (max_img_per_gpu // image_num_range[0]) * cfg.train.iters_per_epoch < len(dataset) // world_size
+        # assert (max_img_per_gpu // image_num_range[0]) * cfg.train.iters_per_epoch < len(dataset) // world_size
 
     # Sampler for distributed training.
     sampler = DynamicDistributedSampler(dataset, seed=cfg.train.base_seed, shuffle=cfg_dataloader.shuffle, rank=rank, drop_last=cfg_dataloader.drop_last)

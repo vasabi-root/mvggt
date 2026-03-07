@@ -461,6 +461,7 @@ class BaseTrainer:
                 # Correctly accumulate total samples
                 current_batch_size = len(batch[1]['scene_id'])
                 total_samples += current_batch_size
+                torch.cuda.empty_cache()
 
 
         # Gather the stats from all processes
@@ -1150,6 +1151,7 @@ class BaseTrainer:
                     self.accelerator.log({"grad_norm": grad_norm}, step=start_steps)
 
                     self.global_step = start_steps
+            torch.cuda.empty_cache()
         
         last_model_path = os.path.join(
             self.cfg.log.ckpt_dir,

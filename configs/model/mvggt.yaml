@@ -29,7 +29,7 @@ train:
     print_freq: 40
     base_seed: 666
 
-    model_dtype: bf16
+    model_dtype: fp32
     # dynamic complie
     dynamo_backend: NO  # CUDAGRAPHS  # INDUCTOR  # NO
     dynamic_compile: true

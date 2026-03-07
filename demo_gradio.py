@@ -330,7 +330,7 @@ def run_model(target_dir, model, text_prompt=None) -> dict:
         input_ids = text_inputs['input_ids'].to(device)
         attention_mask = text_inputs['attention_mask'].to(device)
 
-    dtype = torch.bfloat16
+    dtype = torch.float32
     with torch.no_grad():
         with torch.amp.autocast('cuda', dtype=dtype):
             predictions = model(imgs[None], input_ids=input_ids, attention_mask=attention_mask) # Add batch dimension

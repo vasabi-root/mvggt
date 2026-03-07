@@ -602,7 +602,8 @@ if __name__ == '__main__':
 
     print("Initializing and loading MVGGT model...")
     
-    ckpt_path = 'ckpts/best/pytorch_model.bin'
+    # ckpt_path = 'ckpts/mvggt/best_model/pytorch_model.bin'
+    ckpt_path = 'outputs/mvggt_refer_low_res/ckpts/last_model/pytorch_model.bin'
     model = MVGGT(
         use_referring_segmentation=True,
         train_conf=True, 

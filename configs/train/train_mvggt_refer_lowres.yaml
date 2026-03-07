@@ -20,7 +20,7 @@ train:
     lr: 1e-4
   eval_only: false
   find_unused_parameters: true
-  # resume: ckpts/best_model
+  resume: outputs/mvggt_refer_low_res/ckpts/last_model/
 test:
     num_workers: 8
     batch_size: 1

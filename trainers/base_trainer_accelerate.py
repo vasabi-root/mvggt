@@ -1150,7 +1150,13 @@ class BaseTrainer:
                     self.accelerator.log({"grad_norm": grad_norm}, step=start_steps)
 
                     self.global_step = start_steps
-
+        
+        last_model_path = os.path.join(
+            self.cfg.log.ckpt_dir,
+            "last_model",
+        )
+        self.accelerator.save_state(last_model_path, safe_serialization=False)
+        self.log_info(f"Saved last model at epoch {epoch}")
         return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 

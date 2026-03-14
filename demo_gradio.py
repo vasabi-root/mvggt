@@ -296,7 +296,7 @@ def compute_camera_faces(cone_shape: trimesh.Trimesh) -> np.ndarray:
 # 1) Core model inference
 # -------------------------------------------------------------------------
 # @spaces.GPU(duration=120)
-def run_model(target_dir, model, text_prompt=None) -> dict:
+def run_model(target_dir, model, text_prompt=None, use_cached_reconstruction=False) -> dict:
     print(f"Processing images from {target_dir}")
 
     # Device check
@@ -333,7 +333,7 @@ def run_model(target_dir, model, text_prompt=None) -> dict:
     dtype = torch.float32
     with torch.no_grad():
         with torch.amp.autocast('cuda', dtype=dtype):
-            predictions = model(imgs[None], input_ids=input_ids, attention_mask=attention_mask) # Add batch dimension
+            predictions = model(imgs[None], input_ids=input_ids, attention_mask=attention_mask, use_cached_reconstruction=use_cached_reconstruction) # Add batch dimension
     predictions['images'] = imgs[None].permute(0, 1, 3, 4, 2)
     predictions['conf'] = torch.sigmoid(predictions['conf'])
     edge = depth_edge(predictions['local_points'][..., 2], rtol=0.03)
@@ -373,7 +373,7 @@ def run_model(target_dir, model, text_prompt=None) -> dict:
 def handle_uploads(input_video, input_images, interval=-1):
     """
     Create a new 'target_dir' + 'images' subfolder, and place user-uploaded
-    images or extracted frames from video into it. Return (target_dir, image_paths).
+    images or extracted frames from video into it. Return (target_dir, image_paths, did_input_change).
     """
     start_time = time.time()
     gc.collect()
@@ -438,7 +438,8 @@ def handle_uploads(input_video, input_images, interval=-1):
 
     end_time = time.time()
     print(f"Files copied to {target_dir_images}; took {end_time - start_time:.3f} seconds")
-    return target_dir, image_paths
+    
+    return target_dir, image_paths, True
 
 
 # -------------------------------------------------------------------------
@@ -451,9 +452,9 @@ def update_gallery_on_upload(input_video, input_images, interval=-1):
     If nothing is uploaded, returns "None" and empty list.
     """
     if not input_video and not input_images:
-        return None, None, None, None
-    target_dir, image_paths = handle_uploads(input_video, input_images, interval=interval)
-    return None, target_dir, image_paths, "Upload complete. Click 'Reconstruct' to begin 3D processing."
+        return None, None, None, False, None
+    target_dir, image_paths, did_input_change = handle_uploads(input_video, input_images, interval=interval)
+    return None, target_dir, image_paths, did_input_change, "Upload complete. Click 'Reconstruct' to begin 3D processing."
 
 
 # -------------------------------------------------------------------------
@@ -467,16 +468,18 @@ def gradio_demo(
     frame_filter="All",
     show_cam=True,
     text_prompt=None,
-    apply_mask=False,
+    apply_mask=True,
+    use_cached_reconstruction=True,
+    did_input_change=False,
 ):
     """
     Perform reconstruction using the already-created target_dir/images.
     """
     if not os.path.isdir(target_dir) or target_dir == "None":
-        return None, "No valid target directory found. Please upload first.", None, None
+        return None, "No valid target directory found. Please upload first.", None, None, did_input_change
     
     if not text_prompt or len(text_prompt.strip()) == 0:
-        return None, "Text prompt is required. Please enter a text description.", None, None
+        return None, "Text prompt is required. Please enter a text description.", None, None, did_input_change
 
     gc.collect()
     torch.cuda.empty_cache()
@@ -489,7 +492,7 @@ def gradio_demo(
 
     print("Running run_model...")
     with torch.no_grad():
-        predictions = run_model(target_dir, model, text_prompt)
+        predictions = run_model(target_dir, model, text_prompt, not did_input_change and use_cached_reconstruction)
 
     # Save predictions
     prediction_save_path = os.path.join(target_dir, "predictions.npz")
@@ -522,7 +525,7 @@ def gradio_demo(
 
     log_msg = f"Reconstruction Success ({len(all_files)} frames). Waiting for visualization."
 
-    return glbfile, log_msg, gr.Dropdown(choices=frame_filter_choices, value=frame_filter, interactive=True)
+    return glbfile, log_msg, gr.Dropdown(choices=frame_filter_choices, value=frame_filter, interactive=True), False
 
 
 # -------------------------------------------------------------------------
@@ -603,7 +606,7 @@ if __name__ == '__main__':
     print("Initializing and loading MVGGT model...")
     
     # ckpt_path = 'ckpts/mvggt/best_model/pytorch_model.bin'
-    ckpt_path = 'outputs/mvggt_refer_low_res/ckpts/last_model/pytorch_model.bin'
+    ckpt_path = '/home/bashmac/MIPT/ReferSeg/mvggt_old/ckpts/trained/pytorch_model_ep_14.bin'
     model = MVGGT(
         use_referring_segmentation=True,
         train_conf=True, 
@@ -760,6 +763,7 @@ if __name__ == '__main__':
         is_example = gr.Textbox(label="is_example", visible=False, value="None")
         num_images = gr.Textbox(label="num_images", visible=False, value="None")
         target_dir_output = gr.Textbox(label="Target Dir", visible=False, value="None")
+        did_input_change = gr.Checkbox(label="did_input_change", visible=False, value=False)
 
         gr.HTML(
         """
@@ -885,8 +889,13 @@ if __name__ == '__main__':
                         show_cam = gr.Checkbox(label="Show Cameras", value=True, info="Display camera poses in 3D view")
                         apply_mask = gr.Checkbox(
                             label="Apply Text Mask", 
-                            value=False,
+                            value=True,
                             info="Highlight segmented object in red"
+                        )
+                        use_cached_reconstruction = gr.Checkbox(
+                            label="Use cached reconstruction", 
+                            value=True,
+                            info="Use previous results of 3D reconstruction and run only multimodal branch"
                         )
                     frame_filter = gr.Dropdown(
                         choices=["All"], 
@@ -909,8 +918,10 @@ if __name__ == '__main__':
                 show_cam,
                 text_prompt,
                 apply_mask,
+                use_cached_reconstruction,
+                did_input_change,
             ],
-            outputs=[reconstruction_output, log_output, frame_filter],
+            outputs=[reconstruction_output, log_output, frame_filter, did_input_change],
         ).then(
             fn=lambda: "False", inputs=[], outputs=[is_example]  # set is_example to "False"
         )
@@ -975,12 +986,12 @@ if __name__ == '__main__':
         input_video.change(
             fn=update_gallery_on_upload,
             inputs=[input_video, input_images, interval],
-            outputs=[reconstruction_output, target_dir_output, image_gallery, log_output],
+            outputs=[reconstruction_output, target_dir_output, image_gallery, did_input_change, log_output],
         )
         input_images.change(
             fn=update_gallery_on_upload,
             inputs=[input_video, input_images, interval],
-            outputs=[reconstruction_output, target_dir_output, image_gallery, log_output],
+            outputs=[reconstruction_output, target_dir_output, image_gallery, did_input_change, log_output],
         )
 
     demo.queue(max_size=20).launch(show_error=True, share=True)

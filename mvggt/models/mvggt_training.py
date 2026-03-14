@@ -415,101 +415,177 @@ class MVGGT(nn.Module):
 
             del checkpoint
             torch.cuda.empty_cache()
+            
+        self.reconstruction_cache = None
 
-    def decode(self, hidden, N, H, W, text_embeds=None, attention_mask=None):
-        BN, hw, _ = hidden.shape
+    def decode_reconstruction(self, hidden, N, H, W):
+        """
+        Runs the frozen reconstruction decoder (self.decoder).
+        Returns everything decode_multimodal needs — no work is duplicated.
+ 
+        Returns:
+            final_output      : list[Tensor] — last two hidden states, each (B*N, hw, D)
+            pos_base          : Tensor (B*N, hw, 2) — positional encoding, values fixed,
+                                decode_multimodal reshapes it as needed
+            hw                : int — sequence length after register tokens are prepended
+            initial_hidden    : Tensor (B*N, hw, D) — hidden BEFORE the loop,
+                                used as the starting state of multimodal_hidden
+            intermediate_hiddens : dict[int, Tensor] — {decoder_block_idx: hidden after that block}
+                                   only for indices present in layer_indices_map;
+                                   each tensor is already in the shape the block left it
+                                   (B*N, hw, D) for even blocks, (B, N*hw, D) for odd
+        """
+        BN, _, _ = hidden.shape
         B = BN // N
-        
-        layer_mask_preds = []
-        final_output = []
-        # attention_mask = ~attention_mask
-        hidden = hidden.reshape(B*N, hw, -1)
-
-        register_token = self.register_token.repeat(B, N, 1, 1).reshape(B*N, *self.register_token.shape[-2:])
-
-        # Concatenate special tokens with patch tokens
+ 
+        register_token = (
+            self.register_token
+            .repeat(B, N, 1, 1)
+            .reshape(B * N, *self.register_token.shape[-2:])
+        )
         hidden = torch.cat([register_token, hidden], dim=1)
         hw = hidden.shape[1]
-
+ 
+        # Build positional encoding (values are fixed after this point)
         if self.pos_type.startswith('rope'):
-            pos = self.position_getter(B * N, H//self.patch_size, W//self.patch_size, hidden.device)
-
+            pos = self.position_getter(
+                B * N, H // self.patch_size, W // self.patch_size, hidden.device
+            )
         if self.patch_start_idx > 0:
-            # do not use position embedding for special tokens (camera and register tokens)
-            # so set pos to 0 for the special tokens
             pos = pos + 1
-            pos_special = torch.zeros(B * N, self.patch_start_idx, 2).to(hidden.device).to(pos.dtype)
+            pos_special = torch.zeros(
+                B * N, self.patch_start_idx, 2, device=hidden.device, dtype=pos.dtype
+            )
             pos = torch.cat([pos_special, pos], dim=1)
-       
-        multimodal_hidden = hidden.clone() if self.use_referring_segmentation else None
-
+ 
+        # pos_base keeps the canonical (B*N, hw, 2) view for decode_multimodal
+        pos_base = pos.reshape(B * N, hw, -1)
+ 
+        # Snapshot before the loop — decode_multimodal uses this as multimodal_hidden start
+        initial_hidden = hidden.clone()
+ 
         final_output = []
-        for i in range(len(self.decoder)):
-            blk = self.decoder[i]
-
+        intermediate_hiddens = {}
+ 
+        for i, blk in enumerate(self.decoder):
             if i % 2 == 0:
-                pos = pos.reshape(B*N, hw, -1)
-                hidden = hidden.reshape(B*N, hw, -1)
-                if self.use_referring_segmentation:
-                    multimodal_hidden = multimodal_hidden.reshape(B*N, hw, -1)
-                    text_embeds_ = text_embeds.unsqueeze(1).repeat(1, N, 1, 1).reshape(B*N, text_embeds.shape[1], -1)
-                    attention_mask_ = attention_mask.unsqueeze(1).repeat(1, N, 1).reshape(B*N, attention_mask.shape[1]).unsqueeze(-1).float()
+                pos  = pos_base.reshape(B * N, hw, -1)
+                hidden = hidden.reshape(B * N, hw, -1)
             else:
-                pos = pos.reshape(B, N*hw, -1)
-                hidden = hidden.reshape(B, N*hw, -1)
-                if self.use_referring_segmentation:
-                    multimodal_hidden = multimodal_hidden.reshape(B, N*hw, -1)
-                    text_embeds_ = text_embeds
-                    attention_mask_ = attention_mask.unsqueeze(-1).float()
-
+                pos  = pos_base.reshape(B, N * hw, -1)
+                hidden = hidden.reshape(B, N * hw, -1)
+ 
             if i >= self.num_dec_blk_not_to_checkpoint and self.training:
                 hidden = checkpoint(blk, hidden, xpos=pos, use_reentrant=False)
             else:
                 hidden = blk(hidden, xpos=pos)
-
-            if self.use_referring_segmentation:
-                if i in self.layer_indices_map:
-                    local_idx = self.layer_indices_map[i]
-                    multimodal_blk = self.multimodal_decoder[local_idx]
-                    if i >= self.num_dec_blk_not_to_checkpoint and self.training:
-                        multimodal_hidden = checkpoint(multimodal_blk, multimodal_hidden, xpos=pos, use_reentrant=False)
-                    else:
-                        multimodal_hidden = multimodal_blk(multimodal_hidden, xpos=pos)
-                    multimodal_hidden_ = multimodal_hidden
-
-                    fusion_module = self.fusion_modules[local_idx]
-                    x_residual = fusion_module(multimodal_hidden, text_embeds_, attention_mask_)
-                    
-                    multimodal_hidden = multimodal_hidden + (self.res_gate(x_residual) * x_residual)
-
-                    # Mask Prediction
-                    multimodal_hidden_reshaped = multimodal_hidden.reshape(B*N, hw, -1)
-                    mask_pred = self.predict_mask(multimodal_hidden_reshaped, H, W)
-                    mask_pred = mask_pred.reshape(B, N, H, W)
-                    layer_mask_preds.append(mask_pred)
-                    
-                    injection_idx = local_idx
-                    if injection_idx < len(self.controlnet_injectors):
-                        control_signal = self.controlnet_injectors[injection_idx](hidden)
-                        multimodal_hidden = multimodal_hidden + control_signal
-
-            if i+1 in [len(self.decoder)-1, len(self.decoder)]:
-                final_output.append(hidden.reshape(B*N, hw, -1))
-
-        if self.use_referring_segmentation:
-            return torch.cat([final_output[0], final_output[1]], dim=-1), pos.reshape(B*N, hw, -1), layer_mask_preds
-        else:
-            return torch.cat([final_output[0], final_output[1]], dim=-1), pos.reshape(B*N, hw, -1), None
-
-    def predict_mask(self, hidden, H, W):
-        patch_h, patch_w = H // 14, W // 14
-        hidden = hidden[:, self.patch_start_idx:]
-        hidden = hidden.reshape(-1, patch_h, patch_w, self.dec_embed_dim).permute(0, 3, 1, 2)
-        mask = self.mask_decoder(hidden)
-        mask = F.interpolate(mask, size=(H, W), mode='bilinear', align_corners=False)
-        return mask
-    
-    def forward(self, imgs, input_ids=None, attention_mask=None):
+ 
+            # Save for controlnet injection in decode_multimodal
+            if i in self.layer_indices_map:
+                intermediate_hiddens[i] = hidden  # shape matches current reshape
+ 
+            if i + 1 in [len(self.decoder) - 1, len(self.decoder)]:
+                final_output.append(hidden.reshape(B * N, hw, -1))
+ 
+        return final_output, pos_base, hw, initial_hidden, intermediate_hiddens
+ 
+    # ------------------------------------------------------------------
+ 
+    def decode_multimodal(
+        self, N, H, W,
+        input_ids, attention_mask,
+        final_output, pos_base, hw, initial_hidden, intermediate_hiddens,
+    ):
+        """
+        Runs the trainable multimodal branch on top of decode_reconstruction outputs.
+        No reconstruction decoder blocks are re-run here.
+ 
+        Returns the same tuple as decode() with use_referring_segmentation=True:
+            (concatenated_final_hidden, pos, layer_mask_preds)
+        """
+        
+        text_outputs = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask)
+        text_embeds = text_outputs.last_hidden_state
+        text_embeds_proj = self.text_proj(text_embeds)
+        attention_mask_proj = attention_mask
+        
+        BN = initial_hidden.shape[0]
+        B  = BN // N
+ 
+        multimodal_hidden = initial_hidden  # start from the pre-loop snapshot
+        layer_mask_preds  = []
+ 
+        for i in sorted(self.layer_indices_map.keys()):
+            local_idx = self.layer_indices_map[i]
+ 
+            # Mirror the reshape logic from the original loop
+            if i % 2 == 0:
+                multimodal_hidden = multimodal_hidden.reshape(B * N, hw, -1)
+                pos_i             = pos_base.reshape(B * N, hw, -1)
+                text_embeds_proj_      = (
+                    text_embeds_proj
+                    .unsqueeze(1)
+                    .repeat(1, N, 1, 1)
+                    .reshape(B * N, text_embeds_proj.shape[1], -1)
+                )
+                attention_mask_proj_   = (
+                    attention_mask_proj
+                    .unsqueeze(1).repeat(1, N, 1)
+                    .reshape(B * N, attention_mask_proj.shape[1])
+                    .unsqueeze(-1).float()
+                )
+            else:
+                multimodal_hidden = multimodal_hidden.reshape(B, N * hw, -1)
+                pos_i             = pos_base.reshape(B, N * hw, -1)
+                text_embeds_proj_      = text_embeds_proj
+                attention_mask_proj_   = attention_mask_proj.unsqueeze(-1).float()
+ 
+            # Multimodal self-attention block
+            multimodal_blk = self.multimodal_decoder[local_idx]
+            if i >= self.num_dec_blk_not_to_checkpoint and self.training:
+                multimodal_hidden = checkpoint(
+                    multimodal_blk, multimodal_hidden, xpos=pos_i, use_reentrant=False
+                )
+            else:
+                multimodal_hidden = multimodal_blk(multimodal_hidden, xpos=pos_i)
+ 
+            # Language fusion (cross-attention with text)
+            fusion_module = self.fusion_modules[local_idx]
+            x_residual    = fusion_module(multimodal_hidden, text_embeds_proj_, attention_mask_proj_)
+            multimodal_hidden = multimodal_hidden + (self.res_gate(x_residual) * x_residual)
+ 
+            # Per-layer mask prediction
+            multimodal_hidden_reshaped = multimodal_hidden.reshape(B * N, hw, -1)
+            mask_pred = self.predict_mask(multimodal_hidden_reshaped, H, W)
+            layer_mask_preds.append(mask_pred.reshape(B, N, H, W))
+ 
+            # ControlNet-style injection from the frozen branch
+            if local_idx < len(self.controlnet_injectors):
+                control_signal    = self.controlnet_injectors[local_idx](
+                    intermediate_hiddens[i]
+                )
+                multimodal_hidden = multimodal_hidden + control_signal
+                
+        out_hidden = torch.cat([final_output[0], final_output[1]], dim=-1)
+        out_pos    = pos_base.reshape(BN, hw, -1)
+ 
+        return out_hidden, out_pos, layer_mask_preds
+ 
+    def decode(self, hidden, N, H, W, input_ids=None, attention_mask=None):
+        final_output, pos_base, hw, initial_hidden, intermediate_hiddens = self.decode_reconstruction(hidden, N, H, W)
+ 
+        if not self.use_referring_segmentation:
+            out_hidden = torch.cat([final_output[0], final_output[1]], dim=-1)
+            out_pos    = pos_base.reshape(hidden.shape[0] // N * N, hw, -1)
+            return out_hidden, out_pos, None
+ 
+        return self.decode_multimodal(
+            N, H, W,
+            input_ids, attention_mask,
+            final_output, pos_base, hw, initial_hidden, intermediate_hiddens,
+        )
+        
+    def update_reconstruction_cache(self, imgs):
         imgs = (imgs - self.image_mean) / self.image_std
 
         B, N, _, H, W = imgs.shape
@@ -521,15 +597,52 @@ class MVGGT(nn.Module):
 
         if isinstance(hidden, dict):
             hidden = hidden["x_norm_patchtokens"]
+            
+        final_output, pos_base, hw, initial_hidden, intermediate_hiddens = self.decode_reconstruction(hidden, N, H, W)
+        
+        self.reconstruction_cache = {
+            "BNHW": (B,N,H,W),
+            "patch_h": patch_h,
+            "patch_w": patch_w,
+            "final_output": final_output,
+            "pos_base": pos_base,
+            "hw": hw,
+            "initial_hidden": initial_hidden,
+            "intermediate_hiddens":intermediate_hiddens,
+        }
 
-        text_embeds_proj, attention_mask_proj = None, None
-        if self.use_referring_segmentation:
-            text_outputs = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask)
-            text_embeds = text_outputs.last_hidden_state
-            text_embeds_proj = self.text_proj(text_embeds)
-            attention_mask_proj = attention_mask
 
-        hidden, pos, layer_mask_preds = self.decode(hidden, N, H, W, text_embeds=text_embeds_proj, attention_mask=attention_mask_proj)
+    def predict_mask(self, hidden, H, W):
+        patch_h, patch_w = H // 14, W // 14
+        hidden = hidden[:, self.patch_start_idx:]
+        hidden = hidden.reshape(-1, patch_h, patch_w, self.dec_embed_dim).permute(0, 3, 1, 2)
+        mask = self.mask_decoder(hidden)
+        mask = F.interpolate(mask, size=(H, W), mode='bilinear', align_corners=False)
+        return mask
+    
+    def forward(self, imgs, input_ids=None, attention_mask=None, use_cached_reconstruction=False):
+        if not (use_cached_reconstruction and self.reconstruction_cache):
+            self.update_reconstruction_cache(imgs)
+            
+        B,N,H,W = self.reconstruction_cache["BNHW"]
+        patch_h = self.reconstruction_cache["patch_h"]
+        patch_w = self.reconstruction_cache["patch_w"]
+        final_output = self.reconstruction_cache["final_output"]
+        pos_base = self.reconstruction_cache["pos_base"]
+        hw = self.reconstruction_cache["hw"]
+        initial_hidden = self.reconstruction_cache["initial_hidden"]
+        intermediate_hiddens = self.reconstruction_cache["intermediate_hiddens"]
+        
+        if not self.use_referring_segmentation:
+            hidden = torch.cat([final_output[0], final_output[1]], dim=-1)
+            pos    = pos_base.reshape(hidden.shape[0] // N * N, hw, -1)
+            layer_mask_preds = None
+        else:
+            hidden, pos, layer_mask_preds = self.decode_multimodal(
+                N, H, W,
+                input_ids, attention_mask,
+                final_output, pos_base, hw, initial_hidden, intermediate_hiddens,
+            )
 
         point_hidden = self.point_decoder(hidden, xpos=pos)
         if self.train_conf:

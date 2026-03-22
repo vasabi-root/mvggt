@@ -45,6 +45,7 @@ from accelerate.utils import (
     gather_object,
 )
 
+torch.backends.cuda.preferred_linalg_library("magma")
 
 class BaseTrainer:
     def __init__(self, cfg):
@@ -342,126 +343,130 @@ class BaseTrainer:
             for i, batch in enumerate(metric_logger.log_every(
                 self.test_loader, self.cfg.train.print_freq, header
             )):
-
-                # Stop validation early if iters_per_test is set
-                if self.iters_per_test > 0 and i >= self.iters_per_test:
-                    self.log_info(f"Stopping validation early after {self.iters_per_test} iterations.")
-                    break
-                
-                batch = move_to_device(batch, self.accelerator.device)
-                # Forward pass and loss calculation
-                predictions = self.forward_batch(batch, mode='test')
-                metrics = self.calculate_loss(predictions, batch, mode='test')
-                
-                # --- Collect detailed IoU information for saving ---
-                if self.pixel_data and 'refer_iou_score_global_per_sample' in metrics and 'refer_iou_per_view' in metrics:
-                    batched_text = batch[1]
-                    scene_ids = batched_text['scene_id']
-                    object_ids = batched_text['object_id']
-                    ann_ids = batched_text.get('ann_id', [None] * len(scene_ids))
+                try:
+                    # Stop validation early if iters_per_test is set
+                    if self.iters_per_test > 0 and i >= self.iters_per_test:
+                        self.log_info(f"Stopping validation early after {self.iters_per_test} iterations.")
+                        break
                     
-                    sample_ious = metrics['refer_iou_score_global_per_sample'].cpu().numpy()
-                    per_view_ious = metrics['refer_iou_per_view'].cpu().numpy()
-
-                    for b in range(len(scene_ids)):
-                        # Ensure all IDs are converted to native Python strings for robust serialization.
-                        scene_id_val = scene_ids[b]
-                        if isinstance(scene_id_val, torch.Tensor):
-                            scene_id_val = scene_id_val.item()
+                    batch = move_to_device(batch, self.accelerator.device)
+                    with self.accelerator.autocast():
+                        # Forward pass and loss calculation
+                        predictions = self.forward_batch(batch, mode='test')
+                        metrics = self.calculate_loss(predictions, batch, mode='test')
+                    
+                    # --- Collect detailed IoU information for saving ---
+                    if self.pixel_data and 'refer_iou_score_global_per_sample' in metrics and 'refer_iou_per_view' in metrics:
+                        batched_text = batch[1]
+                        scene_ids = batched_text['scene_id']
+                        object_ids = batched_text['object_id']
+                        ann_ids = batched_text.get('ann_id', [None] * len(scene_ids))
                         
-                        object_id_val = object_ids[b]
-                        if isinstance(object_id_val, torch.Tensor):
-                            object_id_val = object_id_val.item()
+                        sample_ious = metrics['refer_iou_score_global_per_sample'].cpu().numpy()
+                        per_view_ious = metrics['refer_iou_per_view'].cpu().numpy()
 
-                        ann_id_val = ann_ids[b]
-                        if isinstance(ann_id_val, torch.Tensor):
-                            ann_id_val = ann_id_val.item()
-                        ann_id_str = str(ann_id_val) if ann_id_val is not None else None
+                        for b in range(len(scene_ids)):
+                            # Ensure all IDs are converted to native Python strings for robust serialization.
+                            scene_id_val = scene_ids[b]
+                            if isinstance(scene_id_val, torch.Tensor):
+                                scene_id_val = scene_id_val.item()
+                            
+                            object_id_val = object_ids[b]
+                            if isinstance(object_id_val, torch.Tensor):
+                                object_id_val = object_id_val.item()
 
-                        # The batch is collated view-wise. To get all frame IDs for a single sample `b`,
-                        # we need to iterate through all view-dictionaries in `batch[0]` and pick the b-th element from the 'instance' list.
-                        frame_ids = [view_dict['instance'][b] for view_dict in batch[0]]
+                            ann_id_val = ann_ids[b]
+                            if isinstance(ann_id_val, torch.Tensor):
+                                ann_id_val = ann_id_val.item()
+                            ann_id_str = str(ann_id_val) if ann_id_val is not None else None
 
-                        current_epoch_details_list.append({
-                            "scene_id": str(scene_id_val),
-                            "object_id": str(object_id_val),
-                            "ann_id": ann_id_str,
-                            "frame_ids": frame_ids, # Pass the frame IDs along
-                            "sample_iou": sample_ious[b],
-                            "per_view_ious": per_view_ious[b]
-                        })
+                            # The batch is collated view-wise. To get all frame IDs for a single sample `b`,
+                            # we need to iterate through all view-dictionaries in `batch[0]` and pick the b-th element from the 'instance' list.
+                            frame_ids = [view_dict['instance'][b] for view_dict in batch[0]]
 
-                # Store IoU and uniqueness for final metric calculation
-                current_batch_size_for_stats = len(batch[1]['scene_id'])
-                total_processed_in_val_loop += current_batch_size_for_stats
-   
-                if 'refer_iou_per_view' in metrics and 'refer_iou_score_global_per_sample' in metrics:
-                    samples_with_iou_metric += current_batch_size_for_stats
-                    
-                    # This function will now always return 'all_*' stats, and conditionally 'unique_*'/'multiple_*' stats
-                    batch_stats = self._collect_uniqueness_stats(metrics, batch)
-                    
-                    all_global_ious.extend(batch_stats['all_global_ious'])
-                    all_sample_avg_view_ious.extend(batch_stats['all_sample_avg_view_ious'])
-                    all_sample_avg_visible_ious.extend(batch_stats['all_sample_avg_visible_ious'])
-                    all_sample_avg_invisible_ious.extend(batch_stats['all_sample_avg_invisible_ious'])
-                    
-                    # Conditionally extend lists for ScanRefer-specific metrics
-                    if self.lookup:
-                        unique_global_ious.extend(batch_stats['unique_global_ious'])
-                        unique_sample_avg_view_ious.extend(batch_stats['unique_sample_avg_view_ious'])
-                        multiple_global_ious.extend(batch_stats['multiple_global_ious'])
-                        multiple_sample_avg_view_ious.extend(batch_stats['multiple_sample_avg_view_ious'])
+                            current_epoch_details_list.append({
+                                "scene_id": str(scene_id_val),
+                                "object_id": str(object_id_val),
+                                "ann_id": ann_id_str,
+                                "frame_ids": frame_ids, # Pass the frame IDs along
+                                "sample_iou": sample_ious[b],
+                                "per_view_ious": per_view_ious[b]
+                            })
+
+                    # Store IoU and uniqueness for final metric calculation
+                    current_batch_size_for_stats = len(batch[1]['scene_id'])
+                    total_processed_in_val_loop += current_batch_size_for_stats
+    
+                    if 'refer_iou_per_view' in metrics and 'refer_iou_score_global_per_sample' in metrics:
+                        samples_with_iou_metric += current_batch_size_for_stats
                         
-                        unique_sample_avg_visible_ious.extend(batch_stats['unique_sample_avg_visible_ious'])
-                        unique_sample_avg_invisible_ious.extend(batch_stats['unique_sample_avg_invisible_ious'])
-                        multiple_sample_avg_visible_ious.extend(batch_stats['multiple_sample_avg_visible_ious'])
-                        multiple_sample_avg_invisible_ious.extend(batch_stats['multiple_sample_avg_invisible_ious'])
-
-                        # Update counters
-                        samples_without_ann_id += batch_stats['samples_without_ann_id']
-                        samples_in_lookup += batch_stats['samples_in_lookup']
-                        samples_not_in_lookup += batch_stats['samples_not_in_lookup']
+                        # This function will now always return 'all_*' stats, and conditionally 'unique_*'/'multiple_*' stats
+                        batch_stats = self._collect_uniqueness_stats(metrics, batch)
                         
-                if self.pixel_data and 'refer_iou_per_view' in metrics and 'refer_iou_score_global_per_sample' in metrics:
-                    difficulty_stats = self._collect_difficulty_stats(metrics, batch)
-                    hard_global_ious.extend(difficulty_stats['hard_global_ious'])
-                    hard_sample_avg_view_ious.extend(difficulty_stats['hard_sample_avg_view_ious'])
-                    easy_global_ious.extend(difficulty_stats['easy_global_ious'])
-                    easy_sample_avg_view_ious.extend(difficulty_stats['easy_sample_avg_view_ious'])
-                    hard_sample_avg_visible_ious.extend(difficulty_stats['hard_sample_avg_visible_ious'])
-                    hard_sample_avg_invisible_ious.extend(difficulty_stats['hard_sample_avg_invisible_ious'])
-                    easy_sample_avg_visible_ious.extend(difficulty_stats['easy_sample_avg_visible_ious'])
-                    easy_sample_avg_invisible_ious.extend(difficulty_stats['easy_sample_avg_invisible_ious'])
+                        all_global_ious.extend(batch_stats['all_global_ious'])
+                        all_sample_avg_view_ious.extend(batch_stats['all_sample_avg_view_ious'])
+                        all_sample_avg_visible_ious.extend(batch_stats['all_sample_avg_visible_ious'])
+                        all_sample_avg_invisible_ious.extend(batch_stats['all_sample_avg_invisible_ious'])
+                        
+                        # Conditionally extend lists for ScanRefer-specific metrics
+                        if self.lookup:
+                            unique_global_ious.extend(batch_stats['unique_global_ious'])
+                            unique_sample_avg_view_ious.extend(batch_stats['unique_sample_avg_view_ious'])
+                            multiple_global_ious.extend(batch_stats['multiple_global_ious'])
+                            multiple_sample_avg_view_ious.extend(batch_stats['multiple_sample_avg_view_ious'])
+                            
+                            unique_sample_avg_visible_ious.extend(batch_stats['unique_sample_avg_visible_ious'])
+                            unique_sample_avg_invisible_ious.extend(batch_stats['unique_sample_avg_invisible_ious'])
+                            multiple_sample_avg_visible_ious.extend(batch_stats['multiple_sample_avg_visible_ious'])
+                            multiple_sample_avg_invisible_ious.extend(batch_stats['multiple_sample_avg_invisible_ious'])
 
-                if self.cfg.train_dataset.ScanNet.get('dataset_source') in ['nr3d', 'sr3d'] and 'refer_iou_score_global_per_sample' in metrics:
-                     nr3d_stats = self._collect_nr3d_stats(metrics, batch)
-                     nr3d_hard_ious.extend(nr3d_stats['nr3d_hard_ious'])
-                     nr3d_easy_ious.extend(nr3d_stats['nr3d_easy_ious'])
-                     nr3d_vd_ious.extend(nr3d_stats['nr3d_vd_ious'])
-                     nr3d_vi_ious.extend(nr3d_stats['nr3d_vi_ious'])
-                     # Also extend the per-view stats
-                     nr3d_hard_sample_avg_view_ious.extend(nr3d_stats['nr3d_hard_sample_avg_view_ious'])
-                     nr3d_hard_sample_avg_visible_ious.extend(nr3d_stats['nr3d_hard_sample_avg_visible_ious'])
-                     nr3d_hard_sample_avg_invisible_ious.extend(nr3d_stats['nr3d_hard_sample_avg_invisible_ious'])
-                     nr3d_easy_sample_avg_view_ious.extend(nr3d_stats['nr3d_easy_sample_avg_view_ious'])
-                     nr3d_easy_sample_avg_visible_ious.extend(nr3d_stats['nr3d_easy_sample_avg_visible_ious'])
-                     nr3d_easy_sample_avg_invisible_ious.extend(nr3d_stats['nr3d_easy_sample_avg_invisible_ious'])
-                     nr3d_vd_sample_avg_view_ious.extend(nr3d_stats['nr3d_vd_sample_avg_view_ious'])
-                     nr3d_vd_sample_avg_visible_ious.extend(nr3d_stats['nr3d_vd_sample_avg_visible_ious'])
-                     nr3d_vd_sample_avg_invisible_ious.extend(nr3d_stats['nr3d_vd_sample_avg_invisible_ious'])
-                     nr3d_vi_sample_avg_view_ious.extend(nr3d_stats['nr3d_vi_sample_avg_view_ious'])
-                     nr3d_vi_sample_avg_visible_ious.extend(nr3d_stats['nr3d_vi_sample_avg_visible_ious'])
-                     nr3d_vi_sample_avg_invisible_ious.extend(nr3d_stats['nr3d_vi_sample_avg_invisible_ious'])
+                            # Update counters
+                            samples_without_ann_id += batch_stats['samples_without_ann_id']
+                            samples_in_lookup += batch_stats['samples_in_lookup']
+                            samples_not_in_lookup += batch_stats['samples_not_in_lookup']
+                            
+                    if self.pixel_data and 'refer_iou_per_view' in metrics and 'refer_iou_score_global_per_sample' in metrics:
+                        difficulty_stats = self._collect_difficulty_stats(metrics, batch)
+                        hard_global_ious.extend(difficulty_stats['hard_global_ious'])
+                        hard_sample_avg_view_ious.extend(difficulty_stats['hard_sample_avg_view_ious'])
+                        easy_global_ious.extend(difficulty_stats['easy_global_ious'])
+                        easy_sample_avg_view_ious.extend(difficulty_stats['easy_sample_avg_view_ious'])
+                        hard_sample_avg_visible_ious.extend(difficulty_stats['hard_sample_avg_visible_ious'])
+                        hard_sample_avg_invisible_ious.extend(difficulty_stats['hard_sample_avg_invisible_ious'])
+                        easy_sample_avg_visible_ious.extend(difficulty_stats['easy_sample_avg_visible_ious'])
+                        easy_sample_avg_invisible_ious.extend(difficulty_stats['easy_sample_avg_invisible_ious'])
 
-                # Update metrics, excluding per-sample/per-view tensors which the logger cannot average.
-                logger_metrics = {k: v for k, v in metrics.items() if 'per_sample' not in k and 'per_view' not in k}
-                metric_logger.update(**logger_metrics)
+                    if self.cfg.train_dataset.ScanNet.get('dataset_source') in ['nr3d', 'sr3d'] and 'refer_iou_score_global_per_sample' in metrics:
+                        nr3d_stats = self._collect_nr3d_stats(metrics, batch)
+                        nr3d_hard_ious.extend(nr3d_stats['nr3d_hard_ious'])
+                        nr3d_easy_ious.extend(nr3d_stats['nr3d_easy_ious'])
+                        nr3d_vd_ious.extend(nr3d_stats['nr3d_vd_ious'])
+                        nr3d_vi_ious.extend(nr3d_stats['nr3d_vi_ious'])
+                        # Also extend the per-view stats
+                        nr3d_hard_sample_avg_view_ious.extend(nr3d_stats['nr3d_hard_sample_avg_view_ious'])
+                        nr3d_hard_sample_avg_visible_ious.extend(nr3d_stats['nr3d_hard_sample_avg_visible_ious'])
+                        nr3d_hard_sample_avg_invisible_ious.extend(nr3d_stats['nr3d_hard_sample_avg_invisible_ious'])
+                        nr3d_easy_sample_avg_view_ious.extend(nr3d_stats['nr3d_easy_sample_avg_view_ious'])
+                        nr3d_easy_sample_avg_visible_ious.extend(nr3d_stats['nr3d_easy_sample_avg_visible_ious'])
+                        nr3d_easy_sample_avg_invisible_ious.extend(nr3d_stats['nr3d_easy_sample_avg_invisible_ious'])
+                        nr3d_vd_sample_avg_view_ious.extend(nr3d_stats['nr3d_vd_sample_avg_view_ious'])
+                        nr3d_vd_sample_avg_visible_ious.extend(nr3d_stats['nr3d_vd_sample_avg_visible_ious'])
+                        nr3d_vd_sample_avg_invisible_ious.extend(nr3d_stats['nr3d_vd_sample_avg_invisible_ious'])
+                        nr3d_vi_sample_avg_view_ious.extend(nr3d_stats['nr3d_vi_sample_avg_view_ious'])
+                        nr3d_vi_sample_avg_visible_ious.extend(nr3d_stats['nr3d_vi_sample_avg_visible_ious'])
+                        nr3d_vi_sample_avg_invisible_ious.extend(nr3d_stats['nr3d_vi_sample_avg_invisible_ious'])
 
-                # Correctly accumulate total samples
-                current_batch_size = len(batch[1]['scene_id'])
-                total_samples += current_batch_size
-                torch.cuda.empty_cache()
+                    # Update metrics, excluding per-sample/per-view tensors which the logger cannot average.
+                    logger_metrics = {k: v for k, v in metrics.items() if 'per_sample' not in k and 'per_view' not in k}
+                    metric_logger.update(**logger_metrics)
+
+                    # Correctly accumulate total samples
+                    current_batch_size = len(batch[1]['scene_id'])
+                    total_samples += current_batch_size
+                except Exception as e:
+                    import traceback
+                    self.log_info(f"VALIDATE ERROR: {e}")
+                    self.log_info(traceback.format_exc())
 
 
         # Gather the stats from all processes
@@ -521,17 +526,6 @@ class BaseTrainer:
                         "views": views_data
                     }
                     
-        # Aggregate and log sample statistics
-        stats_tensor = torch.tensor([
-            total_processed_in_val_loop, 
-            samples_with_iou_metric, 
-            samples_in_lookup, 
-            samples_not_in_lookup,
-            samples_without_ann_id
-        ], device=self.accelerator.device, dtype=torch.long)
-        
-        dist.all_reduce(stats_tensor, op=dist.ReduceOp.SUM)
-
         # Calculate and log unique/multiple accuracy metrics
         final_metrics = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
         
@@ -619,6 +613,22 @@ class BaseTrainer:
             gathered_nr3d_vi_sample_avg_view = self.accelerator.gather_for_metrics(nr3d_vi_sample_avg_view_ious_tensor)
             gathered_nr3d_vi_sample_avg_visible = self.accelerator.gather_for_metrics(nr3d_vi_sample_avg_visible_ious_tensor)
             gathered_nr3d_vi_sample_avg_invisible = self.accelerator.gather_for_metrics(nr3d_vi_sample_avg_invisible_ious_tensor)
+        
+        # Aggregate and log sample statistics
+        stats_tensor = torch.tensor([
+            total_processed_in_val_loop, 
+            samples_with_iou_metric, 
+            samples_in_lookup, 
+            samples_not_in_lookup,
+            samples_without_ann_id
+        ], device=self.accelerator.device, dtype=torch.long)
+        
+        dist.all_reduce(stats_tensor, op=dist.ReduceOp.SUM)
+
+        # Gather total samples from all processes for accurate counting
+        total_samples_tensor = torch.tensor(total_samples, device=self.accelerator.device)
+        dist.all_reduce(total_samples_tensor, op=dist.ReduceOp.SUM)
+        total_samples_all_gpus = total_samples_tensor.item()
         
         if self.accelerator.is_main_process:
             # Overall
@@ -757,10 +767,6 @@ class BaseTrainer:
         
         # Log sample count summary
         total_val_samples = len(self.test_loader.dataset)
-        # Gather total samples from all processes for accurate counting
-        total_samples_tensor = torch.tensor(total_samples, device=self.accelerator.device)
-        dist.all_reduce(total_samples_tensor, op=dist.ReduceOp.SUM)
-        total_samples_all_gpus = total_samples_tensor.item()
 
         self.log_info(f"Validation finished. Processed {total_samples_all_gpus}/{total_val_samples} samples.")
         self.log_info(f"Validation results: {metric_logger}")

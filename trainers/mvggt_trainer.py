@@ -6,6 +6,8 @@ import hydra
 
 from mvggt.models.loss import MVGGTLoss
 
+torch.backends.cuda.preferred_linalg_library("magma")
+
 class MVGGTTrainer(BaseTrainer):
     def __init__(self, cfg):
         super().__init__(cfg)

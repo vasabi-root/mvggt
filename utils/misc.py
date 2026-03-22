@@ -189,4 +189,4 @@ def move_to_device(batch, device):
             return {key: move_to_device(value, device) for key, value in batch.items()}
         else:
             return batch
-    return batch
+    return batch.contiguous()

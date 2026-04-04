@@ -319,6 +319,17 @@ class MVGGT(nn.Module):
                 nn.Conv2d(dec_embed_dim, 1, 1)
             )
 
+            # -------------------------------------------------------
+            # Skip-connection encoder → mask decoder.
+            # Zero-initialised so training starts as if the skip is
+            # absent, then the model gradually learns to exploit the
+            # low-level colour/texture features from the ViT encoder.
+            # -------------------------------------------------------
+            enc_dim = self.encoder.embed_dim  # ViT-L/14: 1024
+            self.encoder_skip_proj = nn.Linear(enc_dim, dec_embed_dim, bias=True)
+            nn.init.zeros_(self.encoder_skip_proj.weight)
+            nn.init.zeros_(self.encoder_skip_proj.bias)
+
             num_injections = len(self.layer_indices)
             self.controlnet_injectors = nn.ModuleList()
             for _ in range(num_injections):
@@ -434,9 +445,15 @@ class MVGGT(nn.Module):
                                    only for indices present in layer_indices_map;
                                    each tensor is already in the shape the block left it
                                    (B*N, hw, D) for even blocks, (B, N*hw, D) for odd
+            enc_skip_base     : Tensor (B*N, hw, 2) -- skip connection from encoder to mask decoder. 
+                                Contains zero part from 0 to self.patch_start_idx (it exists only for compatibility with mask decoder input)
         """
         BN, _, _ = hidden.shape
         B = BN // N
+
+        # Project encoder features once; shape (B*N, P, dec_embed_dim)
+        # hidden has no register tokens, so added only to patch positions
+        enc_skip = self.encoder_skip_proj(hidden)  # (B*N, P, dec_embed_dim)
  
         register_token = (
             self.register_token
@@ -445,18 +462,18 @@ class MVGGT(nn.Module):
         )
         hidden = torch.cat([register_token, hidden], dim=1)
         hw = hidden.shape[1]
+
  
         # Build positional encoding (values are fixed after this point)
         if self.pos_type.startswith('rope'):
-            pos = self.position_getter(
-                B * N, H // self.patch_size, W // self.patch_size, hidden.device
-            )
+            pos = self.position_getter(B * N, H // self.patch_size, W // self.patch_size, hidden.device)
         if self.patch_start_idx > 0:
             pos = pos + 1
-            pos_special = torch.zeros(
-                B * N, self.patch_start_idx, 2, device=hidden.device, dtype=pos.dtype
-            )
+            pos_special = torch.zeros(B * N, self.patch_start_idx, 2, device=hidden.device, dtype=pos.dtype)
             pos = torch.cat([pos_special, pos], dim=1)
+
+            enc_skip_special = torch.zeros(B * N, self.patch_start_idx, self.dec_embed_dim, device=hidden.device, dtype=pos.dtype)
+            enc_skip_base = torch.cat([enc_skip_special, enc_skip], dim=1)
  
         # pos_base keeps the canonical (B*N, hw, 2) view for decode_multimodal
         pos_base = pos.reshape(B * N, hw, -1)
@@ -487,7 +504,7 @@ class MVGGT(nn.Module):
             if i + 1 in [len(self.decoder) - 1, len(self.decoder)]:
                 final_output.append(hidden.reshape(B * N, hw, -1))
  
-        return final_output, pos_base, hw, initial_hidden, intermediate_hiddens
+        return final_output, pos_base, enc_skip_base, hw, initial_hidden, intermediate_hiddens
  
     # ------------------------------------------------------------------
  
@@ -495,6 +512,7 @@ class MVGGT(nn.Module):
         self, N, H, W,
         input_ids, attention_mask,
         final_output, pos_base, hw, initial_hidden, intermediate_hiddens,
+        enc_skip_base,   # raw ViT patch tokens (B*N, P + num_register_tokens, enc_dim)
     ):
         """
         Runs the trainable multimodal branch on top of decode_reconstruction outputs.
@@ -511,17 +529,17 @@ class MVGGT(nn.Module):
         
         BN = initial_hidden.shape[0]
         B  = BN // N
- 
-        multimodal_hidden = initial_hidden  # start from the pre-loop snapshot
+
+        multimodal_hidden = initial_hidden
         layer_mask_preds  = []
- 
+        enc_skip = enc_skip_base
+
         for i in sorted(self.layer_indices_map.keys()):
             local_idx = self.layer_indices_map[i]
  
             # Mirror the reshape logic from the original loop
             if i % 2 == 0:
-                multimodal_hidden = multimodal_hidden.reshape(B * N, hw, -1)
-                pos_i             = pos_base.reshape(B * N, hw, -1)
+                multimodal_shape = (B * N, hw, -1)
                 text_embeds_proj_      = (
                     text_embeds_proj
                     .unsqueeze(1)
@@ -535,10 +553,13 @@ class MVGGT(nn.Module):
                     .unsqueeze(-1).float()
                 )
             else:
-                multimodal_hidden = multimodal_hidden.reshape(B, N * hw, -1)
-                pos_i             = pos_base.reshape(B, N * hw, -1)
+                multimodal_shape = (B, N * hw, -1)
                 text_embeds_proj_      = text_embeds_proj
                 attention_mask_proj_   = attention_mask_proj.unsqueeze(-1).float()
+
+            multimodal_hidden = multimodal_hidden.reshape(*multimodal_shape)
+            pos_i             = pos_base.reshape(*multimodal_shape)
+            enc_skip          = enc_skip.reshape(*multimodal_shape)
  
             # Multimodal self-attention block
             multimodal_blk = self.multimodal_decoder[local_idx]
@@ -553,17 +574,23 @@ class MVGGT(nn.Module):
             fusion_module = self.fusion_modules[local_idx]
             x_residual    = fusion_module(multimodal_hidden, text_embeds_proj_, attention_mask_proj_)
             multimodal_hidden = multimodal_hidden + (self.res_gate(x_residual) * x_residual)
- 
-            # Per-layer mask prediction
-            multimodal_hidden_reshaped = multimodal_hidden.reshape(B * N, hw, -1)
-            mask_pred = self.predict_mask(multimodal_hidden_reshaped, H, W)
+
+            # -------------------------------------------------------
+            # add encoder skip before mask prediction.
+            # enc_skip is always (B*N, P, D); reshape multimodal to
+            # (B*N, hw, D) first, then add only to the patch slice.
+            # -------------------------------------------------------
+            multimodal_hidden += enc_skip
+
+            multimodal_hidden_bn = multimodal_hidden.reshape(B * N, hw, -1)
+            # multimodal_hidden_bn = multimodal_hidden_bn.clone()
+
+            mask_pred = self.predict_mask(multimodal_hidden_bn, H, W)
             layer_mask_preds.append(mask_pred.reshape(B, N, H, W))
- 
+
             # ControlNet-style injection from the frozen branch
             if local_idx < len(self.controlnet_injectors):
-                control_signal    = self.controlnet_injectors[local_idx](
-                    intermediate_hiddens[i]
-                )
+                control_signal    = self.controlnet_injectors[local_idx](intermediate_hiddens[i])
                 multimodal_hidden = multimodal_hidden + control_signal
                 
         out_hidden = torch.cat([final_output[0], final_output[1]], dim=-1)
@@ -571,9 +598,9 @@ class MVGGT(nn.Module):
  
         return out_hidden, out_pos, layer_mask_preds
  
-    def decode(self, hidden, N, H, W, input_ids=None, attention_mask=None):
-        final_output, pos_base, hw, initial_hidden, intermediate_hiddens = self.decode_reconstruction(hidden, N, H, W)
- 
+    def decode(self, hidden, N, H, W, input_ids=None, attention_mask=None, encoder_hidden=None):
+        final_output, pos_base, enc_skip_base, hw, initial_hidden, intermediate_hiddens = self.decode_reconstruction(hidden, N, H, W)
+
         if not self.use_referring_segmentation:
             out_hidden = torch.cat([final_output[0], final_output[1]], dim=-1)
             out_pos    = pos_base.reshape(hidden.shape[0] // N * N, hw, -1)
@@ -583,6 +610,7 @@ class MVGGT(nn.Module):
             N, H, W,
             input_ids, attention_mask,
             final_output, pos_base, hw, initial_hidden, intermediate_hiddens,
+            encoder_hidden=encoder_hidden,
         )
         
     def update_reconstruction_cache(self, imgs):
@@ -597,18 +625,23 @@ class MVGGT(nn.Module):
 
         if isinstance(hidden, dict):
             hidden = hidden["x_norm_patchtokens"]
-            
-        final_output, pos_base, hw, initial_hidden, intermediate_hiddens = self.decode_reconstruction(hidden, N, H, W)
+
+        # Keep raw encoder output for the skip-connection (B*N, P, enc_dim)
+        encoder_hidden = hidden  # no register tokens, no positional shift
+
+        final_output, pos_base, enc_skip_base, hw, initial_hidden, intermediate_hiddens = self.decode_reconstruction(hidden, N, H, W)
         
         self.reconstruction_cache = {
-            "BNHW": (B,N,H,W),
-            "patch_h": patch_h,
-            "patch_w": patch_w,
-            "final_output": final_output,
-            "pos_base": pos_base,
-            "hw": hw,
-            "initial_hidden": initial_hidden,
-            "intermediate_hiddens":intermediate_hiddens,
+            "encoder_hidden":       encoder_hidden,   # for skip-connection
+            "BNHW":                 (B, N, H, W),
+            "patch_h":              patch_h,
+            "patch_w":              patch_w,
+            "final_output":         final_output,
+            "pos_base":             pos_base,
+            "enc_skip_base":        enc_skip_base,
+            "hw":                   hw,
+            "initial_hidden":       initial_hidden,
+            "intermediate_hiddens": intermediate_hiddens,
         }
 
 
@@ -623,16 +656,17 @@ class MVGGT(nn.Module):
     def forward(self, imgs, input_ids=None, attention_mask=None, use_cached_reconstruction=False):
         if not (use_cached_reconstruction and self.reconstruction_cache):
             self.update_reconstruction_cache(imgs)
-            
-        B,N,H,W = self.reconstruction_cache["BNHW"]
-        patch_h = self.reconstruction_cache["patch_h"]
-        patch_w = self.reconstruction_cache["patch_w"]
-        final_output = self.reconstruction_cache["final_output"]
-        pos_base = self.reconstruction_cache["pos_base"]
-        hw = self.reconstruction_cache["hw"]
-        initial_hidden = self.reconstruction_cache["initial_hidden"]
+
+        B,N,H,W           = self.reconstruction_cache["BNHW"]
+        patch_h           = self.reconstruction_cache["patch_h"]
+        patch_w           = self.reconstruction_cache["patch_w"]
+        final_output      = self.reconstruction_cache["final_output"]
+        pos_base          = self.reconstruction_cache["pos_base"]
+        enc_skip_base     = self.reconstruction_cache["enc_skip_base"]
+        hw                = self.reconstruction_cache["hw"]
+        initial_hidden    = self.reconstruction_cache["initial_hidden"]
         intermediate_hiddens = self.reconstruction_cache["intermediate_hiddens"]
-        
+
         if not self.use_referring_segmentation:
             hidden = torch.cat([final_output[0], final_output[1]], dim=-1)
             pos    = pos_base.reshape(hidden.shape[0] // N * N, hw, -1)
@@ -642,14 +676,19 @@ class MVGGT(nn.Module):
                 N, H, W,
                 input_ids, attention_mask,
                 final_output, pos_base, hw, initial_hidden, intermediate_hiddens,
+                enc_skip_base=enc_skip_base,
             )
 
-        point_hidden = self.point_decoder(hidden, xpos=pos)
+        point_hidden  = self.point_decoder(hidden, xpos=pos)
         if self.train_conf:
             conf_hidden = self.conf_decoder(hidden, xpos=pos)
         camera_hidden = self.camera_decoder(hidden, xpos=pos)
         if self.use_global_points:
-            context = hidden.reshape(B, N, patch_h*patch_w+self.patch_start_idx, -1)[:, 0:1].repeat(1, N, 1, 1).reshape(B*N, patch_h*patch_w+self.patch_start_idx, -1)
+            context = (
+                hidden.reshape(B, N, patch_h * patch_w + self.patch_start_idx, -1)[:, 0:1]
+                .repeat(1, N, 1, 1)
+                .reshape(B * N, patch_h * patch_w + self.patch_start_idx, -1)
+            )
             global_point_hidden = self.global_points_decoder(hidden, context, xpos=pos, ypos=pos)
 
         output = {}
